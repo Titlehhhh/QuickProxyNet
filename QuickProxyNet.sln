@@ -5,12 +5,16 @@ VisualStudioVersion = 17.8.34219.65
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "QuickProxyNet", "QuickProxyNet\QuickProxyNet.csproj", "{01090D42-F93E-4F2B-A78B-0319BA4A2368}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "_build", "build\_build.csproj", "{394D72C9-79F6-46F0-9612-3A8DA6FCFDA2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{394D72C9-79F6-46F0-9612-3A8DA6FCFDA2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{394D72C9-79F6-46F0-9612-3A8DA6FCFDA2}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{01090D42-F93E-4F2B-A78B-0319BA4A2368}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{01090D42-F93E-4F2B-A78B-0319BA4A2368}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{01090D42-F93E-4F2B-A78B-0319BA4A2368}.Release|Any CPU.ActiveCfg = Release|Any CPU
