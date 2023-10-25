@@ -1,20 +1,18 @@
 using System;
 using System.Linq;
 using Nuke.Common;
-using Nuke.Common.CI;
 using Nuke.Common.Execution;
+using Nuke.Common.Git;
 using Nuke.Common.IO;
 using Nuke.Common.ProjectModel;
 using Nuke.Common.Tooling;
-using static Nuke.Common.Tools.DotNet.DotNetTasks;
-
+using Nuke.Common.Tools.DotNet;
+using Nuke.Common.Tools.GitVersion;
 using Nuke.Common.Utilities.Collections;
 using static Nuke.Common.EnvironmentInfo;
 using static Nuke.Common.IO.FileSystemTasks;
 using static Nuke.Common.IO.PathConstruction;
-using Nuke.Common.Git;
-using Nuke.Common.Tools.GitVersion;
-using Nuke.Common.Tools.DotNet;
+using static Nuke.Common.Tools.DotNet.DotNetTasks;
 
 
 class Build : NukeBuild
@@ -32,10 +30,10 @@ class Build : NukeBuild
 	[Parameter] string NugetApiUrl = "https://api.nuget.org/v3/index.json";
 	[Parameter] string NugetApiKey;
 
-	public static int Main () => Execute<Build>(x => x.Compile);
+	public static int Main() => Execute<Build>(x => x.Compile);
 
-    [Parameter("Configuration to build - Default is 'Debug' (local) or 'Release' (server)")]
-    readonly Configuration Configuration = IsLocalBuild ? Configuration.Debug : Configuration.Release;
+	[Parameter("Configuration to build - Default is 'Debug' (local) or 'Release' (server)")]
+	readonly Configuration Configuration = IsLocalBuild ? Configuration.Debug : Configuration.Release;
 
 	AbsolutePath SourceDirectory => RootDirectory / "src";
 	AbsolutePath TestsDirectory => RootDirectory / "tests";
@@ -44,23 +42,23 @@ class Build : NukeBuild
 	AbsolutePath NugetDirectory => ArtifactsDirectory / "nuget";
 
 	Target Clean => _ => _
-        .Before(Restore)
-        .Executes(() =>
-        {
-            
-        });
+		.Before(Restore)
+		.Executes(() =>
+		{
 
-    Target Restore => _ => _
-        .Executes(() =>
-        {
+		});
+
+	Target Restore => _ => _
+		.Executes(() =>
+		{
 			DotNetRestore(_ => _
 			   .SetProjectFile(Solution));
 		});
 
-    Target Compile => _ => _
-        .DependsOn(Restore)
-        .Executes(() =>
-        {
+	Target Compile => _ => _
+		.DependsOn(Restore)
+		.Executes(() =>
+		{
 			Console.WriteLine($"Solution: {Solution}");
 			Console.WriteLine($"GitVersion: {GitVersion}");
 
@@ -101,6 +99,26 @@ class Build : NukeBuild
 				.SetNoDependencies(true)
 				.SetOutputDirectory(ArtifactsDirectory / "nuget"));
 
+	  });
+
+	Target Push => _ => _
+	  .DependsOn(Pack)
+	  .Requires(() => NugetApiUrl)
+	  .Requires(() => NugetApiKey)
+	  .Requires(() => Configuration.Equals(Configuration.Release))
+	  .Executes(() =>
+	  {
+		  NugetDirectory.GlobFiles("*.nupkg")
+				  .NotEmpty()
+				  // .Where(x => !x.EndsWith("symbols.nupkg"))
+				  .ForEach(x =>
+				  {
+					  DotNetNuGetPush(s => s
+						  .SetTargetPath(x)
+						  .SetSource(NugetApiUrl)
+						  .SetApiKey(NugetApiKey)
+					  );
+				  });
 	  });
 
 }

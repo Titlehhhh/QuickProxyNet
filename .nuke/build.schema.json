@@ -81,6 +81,7 @@
               "Clean",
               "Compile",
               "Pack",
+              "Push",
               "Restore"
             ]
           }
@@ -98,6 +99,7 @@
               "Clean",
               "Compile",
               "Pack",
+              "Push",
               "Restore"
             ]
           }
