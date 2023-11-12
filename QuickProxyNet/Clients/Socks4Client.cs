@@ -81,6 +81,7 @@ namespace QuickProxyNet
 					var ip = ipAddresses[i].GetAddressBytes();
 
 					_cache[host] = ip;
+					return ip;
 				}
 			}
 

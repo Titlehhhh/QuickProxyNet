@@ -5,13 +5,21 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>		
 		<LangVersion>11</LangVersion>
-		<EnableUnsafeBinaryFormatterSerialization>true</EnableUnsafeBinaryFormatterSerialization>
+		<PackageVersion>$([System.DateTime]::Now.ToString("yyyy.MM.dd.HHmmss"))</PackageVersion>
+		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 		
+
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+		<PackageOutputPath>$(SolutionDir)artifacts\DebugLocalNuGet</PackageOutputPath>
+		<PackageVersion>1.0.0-local.$([System.DateTime]::Now.ToString("yyyy.MM.dd.HHmmss"))</PackageVersion>
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="ConfigureAwait.Fody" Version="3.3.2" />
+		<PackageReference Include="ConfigureAwait.Fody" Version="*" />
 	</ItemGroup>
 
+	
 
 </Project>
