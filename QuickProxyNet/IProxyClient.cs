@@ -1,22 +1,25 @@
 ﻿using System.Net;
 
-namespace QuickProxyNet
+namespace QuickProxyNet;
+
+public interface IProxyClient
 {
-	public interface IProxyClient
-	{
-		NetworkCredential ProxyCredentials { get; }
+    NetworkCredential? ProxyCredentials { get; }
 
-		string ProxyHost { get; }
-		 
-		int ProxyPort { get; }
+    string ProxyHost { get; }
 
-		ProxyType Type { get; }
+    int ProxyPort { get; }
 
-		IPEndPoint LocalEndPoint { get; set; }
+    ProxyType Type { get; }
+
+    IPEndPoint LocalEndPoint { get; set; }
+
+    int WriteTimeout { get; set; }
+    int ReadTimeout { get; set; }
 
 
-		Task<Stream> ConnectAsync(string host, int port, CancellationToken cancellationToken = default(CancellationToken));
+    ValueTask<Stream> ConnectAsync(string host, int port, CancellationToken cancellationToken = default);
+    ValueTask<Stream> ConnectAsync(Stream source, string host, int port, CancellationToken cancellationToken = default);
 
-		Task<Stream> ConnectAsync(string host, int port, int timeout, CancellationToken cancellationToken = default(CancellationToken));
-	}
+    ValueTask<Stream> ConnectAsync(string host, int port, int timeout, CancellationToken cancellationToken = default);
 }

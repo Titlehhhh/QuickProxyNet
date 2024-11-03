@@ -1,180 +1,144 @@
-﻿using System.Buffers;
-using System.Net;
+﻿using System.Net;
 using System.Net.Security;
-using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
-using System.Text;
 
-namespace QuickProxyNet
+namespace QuickProxyNet;
+
+public class HttpsProxyClient : ProxyClient
 {
+    private SslCertificateValidationInfo sslValidationInfo;
 
-	public class HttpsProxyClient : ProxyClient
-	{
+    public HttpsProxyClient(string host, int port) : base("https", host, port)
+    {
+    }
 
+    public HttpsProxyClient(string host, int port, NetworkCredential credentials) : base("https", host, port,
+        credentials)
+    {
+    }
 
-		const SslProtocols DefaultSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+    public RemoteCertificateValidationCallback ServerCertificateValidationCallback { get; set; }
 
-		const int BufferSize = 4096;
+    public bool CheckCertificateRevocation { get; set; }
 
-		public HttpsProxyClient(string host, int port) : base(host, port)
-		{
-			SslProtocols = DefaultSslProtocols;
-		}
+    public X509CertificateCollection ClientCertificates { get; set; }
 
-		public HttpsProxyClient(string host, int port, NetworkCredential credentials) : base(host, port, credentials)
-		{
-			SslProtocols = DefaultSslProtocols;
-		}
+    public CipherSuitesPolicy SslCipherSuitesPolicy { get; set; }
 
-		public SslProtocols SslProtocols
-		{
-			get; set;
-		}
+    public SslProtocols SslProtocols { get; set; } = SslProtocols.Tls12 | SslProtocols.Tls13;
 
-		public CipherSuitesPolicy SslCipherSuitesPolicy
-		{
-			get; set;
-		}
+    public override ProxyType Type => ProxyType.Https;
 
-		public X509CertificateCollection ClientCertificates
-		{
-			get; set;
-		}
+    private SslClientAuthenticationOptions GetSslClientAuthenticationOptions(string host,
+        RemoteCertificateValidationCallback remoteCertificateValidationCallback)
+    {
+        return new SslClientAuthenticationOptions
+        {
+            CertificateRevocationCheckMode =
+                CheckCertificateRevocation ? X509RevocationMode.Online : X509RevocationMode.NoCheck,
+            ApplicationProtocols = new List<SslApplicationProtocol> { SslApplicationProtocol.Http11 },
+            RemoteCertificateValidationCallback = remoteCertificateValidationCallback,
 
-		public bool CheckCertificateRevocation
-		{
-			get; set;
-		}
+            CipherSuitesPolicy = SslCipherSuitesPolicy,
 
-		public RemoteCertificateValidationCallback ServerCertificateValidationCallback
-		{
-			get; set;
-		}
+            ClientCertificates = ClientCertificates,
+            EnabledSslProtocols = SslProtocols,
+            TargetHost = host
+        };
+    }
 
-		public override ProxyType Type => ProxyType.HTTPS;
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    public override async ValueTask<Stream> ConnectAsync(Stream stream, string host, int port,
+        CancellationToken cancellationToken = default)
+    {
+        var ssl = new SslStream(stream, false, ValidateRemoteCertificate);
+        try
+        {
+            await ssl.AuthenticateAsClientAsync(GetSslClientAuthenticationOptions(host, ValidateRemoteCertificate),
+                cancellationToken);
+        }
+        catch (Exception e)
+        {
+            ssl.Dispose();
+            throw;
+        }
 
-		// Note: This is used by SslHandshakeException to build the exception message.
-		SslCertificateValidationInfo sslValidationInfo;
-		[MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-		bool ValidateRemoteCertificate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors)
-		{
-			bool valid;
+        var result =
+            await HttpHelper.EstablishHttpTunnelAsync(ssl, ProxyUri, host, port, ProxyCredentials, cancellationToken);
+        return result;
+    }
 
-			sslValidationInfo?.Dispose();
-			sslValidationInfo = null;
+    private bool ValidateRemoteCertificate(object sender, X509Certificate certificate, X509Chain chain,
+        SslPolicyErrors sslPolicyErrors)
+    {
+        bool valid;
 
-			if (ServerCertificateValidationCallback != null)
-			{
-				valid = ServerCertificateValidationCallback(ProxyHost, certificate, chain, sslPolicyErrors);
+        sslValidationInfo?.Dispose();
+        sslValidationInfo = null;
 
-			}
-			else if (ServicePointManager.ServerCertificateValidationCallback != null)
-			{
-				valid = ServicePointManager.ServerCertificateValidationCallback(ProxyHost, certificate, chain, sslPolicyErrors);
+        if (ServerCertificateValidationCallback != null)
+            valid = ServerCertificateValidationCallback(ProxyHost, certificate, chain, sslPolicyErrors);
+        else if (ServicePointManager.ServerCertificateValidationCallback != null)
+            valid = ServicePointManager.ServerCertificateValidationCallback(ProxyHost, certificate, chain,
+                sslPolicyErrors);
+        else
+            valid = sslPolicyErrors == SslPolicyErrors.None;
 
-			}
-			else
-			{
-				valid = sslPolicyErrors == SslPolicyErrors.None;
-			}
+        if (!valid)
+            // Note: The SslHandshakeException.Create() method will nullify this once it's done using it.
+            sslValidationInfo = new SslCertificateValidationInfo(sender, certificate, chain, sslPolicyErrors);
 
-			if (!valid)
-			{
-				// Note: The SslHandshakeException.Create() method will nullify this once it's done using it.
-				sslValidationInfo = new SslCertificateValidationInfo(sender, certificate, chain, sslPolicyErrors);
-			}
+        return valid;
+    }
 
-			return valid;
-		}
-		[MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-		SslClientAuthenticationOptions GetSslClientAuthenticationOptions(string host, RemoteCertificateValidationCallback remoteCertificateValidationCallback)
-		{
-			return new SslClientAuthenticationOptions
-			{
-				CertificateRevocationCheckMode = CheckCertificateRevocation ? X509RevocationMode.Online : X509RevocationMode.NoCheck,
-				ApplicationProtocols = new List<SslApplicationProtocol> { SslApplicationProtocol.Http11 },
-				RemoteCertificateValidationCallback = remoteCertificateValidationCallback,
+    private sealed class SslChainElement : IDisposable
+    {
+        public readonly X509Certificate2 Certificate;
+        public readonly X509ChainStatus[] ChainElementStatus;
+        public readonly string Information;
 
-				CipherSuitesPolicy = SslCipherSuitesPolicy,
+        public SslChainElement(X509ChainElement element)
+        {
+            Certificate = new X509Certificate2(element.Certificate.RawData);
+            ChainElementStatus = element.ChainElementStatus;
+            Information = element.Information;
+        }
 
-				ClientCertificates = ClientCertificates,
-				EnabledSslProtocols = SslProtocols,
-				TargetHost = host
-			};
-		}
-		[MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-		public override async Task<Stream> ConnectAsync(string host, int port, CancellationToken cancellationToken = default(CancellationToken))
-		{
-			ValidateArguments(host, port);
+        public void Dispose()
+        {
+            Certificate.Dispose();
+        }
+    }
 
-			cancellationToken.ThrowIfCancellationRequested();
-			var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+    private sealed class SslCertificateValidationInfo : IDisposable
+    {
+        public readonly X509Certificate2 Certificate;
+        public readonly List<SslChainElement> ChainElements;
+        public readonly X509ChainStatus[] ChainStatus;
+        public readonly string Host;
+        public readonly SslPolicyErrors SslPolicyErrors;
 
-			await socket.ConnectAsync(ProxyHost, ProxyPort, cancellationToken);
-			var ssl = new SslStream(new NetworkStream(socket, true), false, ValidateRemoteCertificate);
+        public SslCertificateValidationInfo(object sender, X509Certificate certificate, X509Chain chain,
+            SslPolicyErrors sslPolicyErrors)
+        {
+            Certificate = new X509Certificate2(certificate.Export(X509ContentType.Cert));
+            ChainElements = new List<SslChainElement>();
+            SslPolicyErrors = sslPolicyErrors;
+            ChainStatus = chain.ChainStatus;
+            Host = sender as string;
 
-			try
-			{
-				await ssl.AuthenticateAsClientAsync(GetSslClientAuthenticationOptions(host, ValidateRemoteCertificate), cancellationToken);
+            // Note: we need to copy the ChainElements because the chain will be destroyed
+            foreach (var element in chain.ChainElements)
+                ChainElements.Add(new SslChainElement(element));
+        }
 
-			}
-			catch (Exception ex)
-			{
-				await ssl.DisposeAsync();
-
-				throw SslHandshakeException.Create(ref sslValidationInfo, ex, false, "HTTP", host, port, 443, 80);
-			}
-
-			var command = HttpProxyClient.GetConnectCommand(host, port, ProxyCredentials);
-
-			try
-			{
-				await ssl.WriteAsync(command.AsMemory(0, command.Length), cancellationToken);
-
-				var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
-				var builder = new StringBuilder();
-
-				try
-				{
-					var newline = false;
-
-
-					do
-					{
-						int nread = await ssl.ReadAsync(buffer, 0, BufferSize);
-						if (nread <= 0)
-							throw new EndOfStreamException();
-						int index = 0;
-
-						if (HttpProxyClient.TryConsumeHeaders(builder, buffer, ref index, nread, ref newline))
-							break;
-					} while (true);
-				}
-				finally
-				{
-					ArrayPool<byte>.Shared.Return(buffer);
-				}
-				int index1 = 0;
-
-				while (builder[index1] != '\n')
-					index1++;
-
-				if (index1 > 0 && builder[index1 - 1] == '\r')
-					index1--;
-
-				// trim everything beyond the "HTTP/1.1 200 ..." part of the response
-				builder.Length = index1;
-
-				HttpProxyClient.ValidateHttpResponse(builder.ToString(), host, port);
-				return ssl;
-			}
-			catch
-			{
-				await ssl.DisposeAsync();
-				throw;
-			}
-		}
-	}
+        public void Dispose()
+        {
+            Certificate.Dispose();
+            foreach (var element in ChainElements)
+                element.Dispose();
+        }
+    }
 }

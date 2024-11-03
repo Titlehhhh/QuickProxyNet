@@ -1,25 +1,29 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-	<PropertyGroup>
-		<TargetFrameworks>net8.0;net7.0;net6.0</TargetFrameworks>
-		<ImplicitUsings>enable</ImplicitUsings>
-		<Nullable>enable</Nullable>		
-		<LangVersion>11</LangVersion>
-		<PackageVersion>$([System.DateTime]::Now.ToString("yyyy.MM.dd.HHmmss"))</PackageVersion>
-		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-		
+    <PropertyGroup>
+        <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+        <MinVerMinimumMajorMinor>0.0</MinVerMinimumMajorMinor>
+        <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 
-	</PropertyGroup>
+        <MinVerDefaultPreReleaseIdentifiers>preview.0</MinVerDefaultPreReleaseIdentifiers>
+    </PropertyGroup>
 
-	<PropertyGroup Condition="'$(Configuration)' == 'Debug'">
-		<PackageOutputPath>$(SolutionDir)artifacts\DebugLocalNuGet</PackageOutputPath>
-		<PackageVersion>1.0.0-local.$([System.DateTime]::Now.ToString("yyyy.MM.dd.HHmmss"))</PackageVersion>
-	</PropertyGroup>
 
-	<ItemGroup>
-		<PackageReference Include="ConfigureAwait.Fody" Version="*" />
-	</ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="DotNext" Version="5.14.0" />
+        <PackageReference Include="MinVer" Version="6.0.0" PrivateAssets="All" />
 
-	
+        <PackageReference Include="ConfigureAwait.Fody" Version="3.3.2" PrivateAssets="All"/>
+
+        <PackageReference Include="ZString" Version="2.6.0"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="QuickProxyNet.Tests" />
+    </ItemGroup>
+
 
 </Project>

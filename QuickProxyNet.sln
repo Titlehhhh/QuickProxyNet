@@ -7,6 +7,10 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "QuickProxyNet", "QuickProxy
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "_build", "build\_build.csproj", "{394D72C9-79F6-46F0-9612-3A8DA6FCFDA2}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuickProxyNet.Tests", "QuickProxyNet.Tests\QuickProxyNet.Tests.csproj", "{702FF47B-DD00-4472-AF06-81949B639BA9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sample", "Sample\Sample.csproj", "{801BEBAC-C593-42CA-91A1-CA2B5C9EB191}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -19,6 +23,14 @@ Global
 		{01090D42-F93E-4F2B-A78B-0319BA4A2368}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{01090D42-F93E-4F2B-A78B-0319BA4A2368}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{01090D42-F93E-4F2B-A78B-0319BA4A2368}.Release|Any CPU.Build.0 = Release|Any CPU
+		{702FF47B-DD00-4472-AF06-81949B639BA9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{702FF47B-DD00-4472-AF06-81949B639BA9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{702FF47B-DD00-4472-AF06-81949B639BA9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{702FF47B-DD00-4472-AF06-81949B639BA9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{801BEBAC-C593-42CA-91A1-CA2B5C9EB191}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{801BEBAC-C593-42CA-91A1-CA2B5C9EB191}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{801BEBAC-C593-42CA-91A1-CA2B5C9EB191}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{801BEBAC-C593-42CA-91A1-CA2B5C9EB191}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
