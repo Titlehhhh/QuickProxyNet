@@ -1,3 +1,5 @@
+![](icon.png)
+
 [![NuGet version (QuickProxyNet)](https://img.shields.io/nuget/v/QuickProxyNet?style=flat-square)](https://www.nuget.org/packages/QuickProxyNet/)
 
 # QuickProxyNet
