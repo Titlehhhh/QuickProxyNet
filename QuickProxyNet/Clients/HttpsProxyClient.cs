@@ -6,6 +6,10 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace QuickProxyNet;
 
+/// <summary>
+/// Provides functionality for connecting to a server using an HTTPS proxy.
+/// Supports secure tunneling over SSL/TLS through the proxy.
+/// </summary>
 public class HttpsProxyClient : ProxyClient
 {
     private SslCertificateValidationInfo sslValidationInfo;

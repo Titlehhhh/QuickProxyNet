@@ -41,8 +41,11 @@ public abstract class ProxyClient : IProxyClient
 
     public int ProxyPort { get; }
 
-    public IPEndPoint LocalEndPoint { get; set; }
-    
+    public IPEndPoint? LocalEndPoint { get; set; }
+
+    public LingerOption? LingerState { get; set; } = new LingerOption(true, 0);
+    public bool NoDelay { get; set; } = true;
+
     public int WriteTimeout { get; set; }
     public int ReadTimeout { get; set; }
 
@@ -50,11 +53,13 @@ public abstract class ProxyClient : IProxyClient
     {
         var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
         {
-            NoDelay = true,
-            LingerState = new LingerOption(true, 0),
+            NoDelay = this.NoDelay,
+            LingerState = this.LingerState,
             SendTimeout = this.WriteTimeout,
             ReceiveTimeout = this.ReadTimeout
         };
+        if (LocalEndPoint is not null)
+            socket.Bind(LocalEndPoint);
         try
         {
             await socket.ConnectAsync(ProxyHost, ProxyPort, cancellationToken);

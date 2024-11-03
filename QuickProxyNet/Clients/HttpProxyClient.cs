@@ -3,6 +3,10 @@ using System.Runtime.CompilerServices;
 
 namespace QuickProxyNet;
 
+/// <summary>
+/// Provides functionality for connecting to a server using an HTTP proxy.
+/// Supports the HTTP CONNECT method for tunneling connections.
+/// </summary>
 public class HttpProxyClient : ProxyClient
 {
     public HttpProxyClient(string host, int port) : base("http", host, port)

@@ -3,6 +3,11 @@ using System.Runtime.CompilerServices;
 
 namespace QuickProxyNet;
 
+/// <summary>
+/// Provides functionality for connecting to a server using a SOCKS4a proxy.
+/// Extends SOCKS4 to allow domain name resolution through the proxy itself,
+/// making it useful in networks where direct DNS resolution is restricted.
+/// </summary>
 public class Socks4aClient : ProxyClient
 {
     public Socks4aClient(string host, int port) : base("socks4a", host, port)

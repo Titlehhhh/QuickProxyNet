@@ -2,6 +2,11 @@
 
 namespace QuickProxyNet;
 
+/// <summary>
+/// Provides functionality for connecting to a server using a SOCKS5 proxy.
+/// Supports more advanced features than SOCKS4, including domain name resolution
+/// through the proxy and authentication mechanisms if required.
+/// </summary>
 public class Socks5Client : ProxyClient
 {
     public Socks5Client(string host, int port) : base("socks5", host, port)
