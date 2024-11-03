@@ -34,13 +34,13 @@ using QuickProxyNet;
 Uri proxyUri = new Uri("http://username:password@proxyserver.com:8080");
 
 // Create a proxy client
-var QuickProxyNet = QuickProxyNetFactory.Instance.Create(proxyUri);
+var client = ProxyClientFactory.Instance.Create(proxyUri);
 
 // Connect to the target server through the proxy and get a raw Stream for direct data access
-using (var connectionStream = await QuickProxyNet.ConnectAsync("destinationserver.com", 80))
+using (var connectionStream = await client.ConnectAsync("destinationserver.com", 80))
 {
-// Work with the Stream directly (e.g., send and receive data)
-// Example: Send HTTP request, work with binary data, etc.
+    // Work with the Stream directly (e.g., send and receive data)
+    // Example: Send HTTP request, work with binary data, etc.
 }
 ```
 ### Example: Creating a Proxy Client with Custom Configuration
@@ -58,12 +58,12 @@ int proxyPort = 1080;
 NetworkCredential credentials = new NetworkCredential("username", "password");
 
 // Create the proxy client with specified configuration
-var QuickProxyNet = QuickProxyNetFactory.Instance.Create(proxyType, proxyHost, proxyPort, credentials);
+var client = ProxyClientFactory.Instance.Create(proxyType, proxyHost, proxyPort, credentials);
 
 // Connect to the target server and obtain a raw Stream
-using (var connectionStream = await QuickProxyNet.ConnectAsync("destinationserver.com", 80))
+using (var connectionStream = await client.ConnectAsync("destinationserver.com", 80))
 {
-// Directly work with the Stream for low-level network operations
+    // Directly work with the Stream for low-level network operations
 }
 ```
 ### Supported Proxy Types
