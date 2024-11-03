@@ -1,3 +1,5 @@
+[![NuGet version (QuickProxyNet)](https://img.shields.io/nuget/v/QuickProxyNet?style=flat-square)](https://www.nuget.org/packages/QuickProxyNet/)
+
 # QuickProxyNet
 
 **QuickProxyNet** is a high-performance C# library for connecting to servers via various types of proxies, providing direct and efficient access to the underlying data stream. It supports a range of proxy protocols, including HTTP, HTTPS, SOCKS4, SOCKS4a, and SOCKS5, enabling seamless integration into .NET applications requiring proxy connections.
