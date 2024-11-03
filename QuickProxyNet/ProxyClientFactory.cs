@@ -4,6 +4,8 @@ namespace QuickProxyNet;
 
 public sealed class ProxyClientFactory
 {
+    public static ProxyClientFactory Instance => new();
+
     public IProxyClient Create(Uri proxyUri)
     {
         NetworkCredential? credential = null;
@@ -23,6 +25,7 @@ public sealed class ProxyClientFactory
 
             credential = new NetworkCredential(userAndPass[0], userAndPass[1]);
         }
+
         return Create(type, proxyUri.Host, proxyUri.Port, credential);
     }
 
@@ -45,6 +48,7 @@ public sealed class ProxyClientFactory
         {
             return Create(type, host, port);
         }
+
         return type switch
         {
             ProxyType.Http => new HttpProxyClient(host, port, networkCredential),
