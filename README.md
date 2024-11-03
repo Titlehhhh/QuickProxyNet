@@ -1,47 +1,86 @@
-[![NuGet version (QuickProxyNet )](https://img.shields.io/nuget/v/QuickProxyNet?style=flat-square)](https://www.nuget.org/packages/QuickProxyNet/)
-
 # QuickProxyNet
 
-High performance asynchronous library for connecting to Http, Https, Socks4, Socks4a, Socks5 proxy servers.
+**QuickProxyNet** is a high-performance C# library for connecting to servers via various types of proxies, providing direct and efficient access to the underlying data stream. It supports a range of proxy protocols, including HTTP, HTTPS, SOCKS4, SOCKS4a, and SOCKS5, enabling seamless integration into .NET applications requiring proxy connections.
+
+## Features
+
+- **High-Performance Connection Handling**: Designed for minimal latency and optimal resource usage, allowing for efficient handling of high-load scenarios.
+- **Support for Multiple Proxy Types**: Connect via HTTP, HTTPS, SOCKS4, SOCKS4a, and SOCKS5 proxies.
+- **Raw Stream Access**: Upon connection, QuickProxyNet provides a raw Stream to directly interact with data, making it highly suitable for applications needing low-level network control.
+- **Customizable Timeout and Connection Settings**: Configure timeouts, connection endpoints, and proxy settings for optimal network performance.
+
+## Installation
+
+Clone the repository or install via your preferred NuGet package manager (if available):
+
+```dotnet add package QuickProxyNet```
+
 
 ## Usage
 
-### Simple example
+The library offers a QuickProxyNetFactory class to easily create proxy connections. Here’s a quick guide on how to use it.
 
+### Example: Creating a Proxy Client
+
+The following example shows how to create a proxy client using a URI and connect to a remote server through it:
 ```csharp
-using QuickProxyNet;
-
-IProxyClient client = ProxyClientFactory.Instance.Create(ProxyType.Http, host, por);
-
-Stream stream = await client.ConnectAsync("example.com", 80);
-```
-
-### With Login and Password
-
-```csharp
-using QuickProxyNet;
+using System;
 using System.Net;
+using QuickProxyNet;
 
-IProxyClient client = ProxyClientFactory.Instance.Create(ProxyType.Http, host, port, new NetworkCredential("login","password"));
+// URI of the proxy server, including protocol (e.g., "http", "socks5")
+Uri proxyUri = new Uri("http://username:password@proxyserver.com:8080");
 
-Stream stream = await client.ConnectAsync("example.com", 80);
+// Create a proxy client
+var QuickProxyNet = QuickProxyNetFactory.Instance.Create(proxyUri);
+
+// Connect to the target server through the proxy and get a raw Stream for direct data access
+using (var connectionStream = await QuickProxyNet.ConnectAsync("destinationserver.com", 80))
+{
+// Work with the Stream directly (e.g., send and receive data)
+// Example: Send HTTP request, work with binary data, etc.
+}
 ```
+### Example: Creating a Proxy Client with Custom Configuration
 
-### From URI
-
+You can also specify the proxy type, host, port, and optional credentials:
 ```csharp
-Uri uri = new Uri("<protocol>://<user?>:<pass?>@host:port");
-IProxyClient client = ProxyClientFactory.Instance.Create(uri);
+using System;
+using System.Net;
+using QuickProxyNet;
+
+// Define proxy details
+ProxyType proxyType = ProxyType.Socks5;
+string proxyHost = "proxyserver.com";
+int proxyPort = 1080;
+NetworkCredential credentials = new NetworkCredential("username", "password");
+
+// Create the proxy client with specified configuration
+var QuickProxyNet = QuickProxyNetFactory.Instance.Create(proxyType, proxyHost, proxyPort, credentials);
+
+// Connect to the target server and obtain a raw Stream
+using (var connectionStream = await QuickProxyNet.ConnectAsync("destinationserver.com", 80))
+{
+// Directly work with the Stream for low-level network operations
+}
 ```
+### Supported Proxy Types
 
-### Only HTTP
+- **HTTP**: Standard HTTP proxy with CONNECT support for tunneling.
+- **HTTPS**: Supports SSL/TLS tunneling.
+- **SOCKS4**: Supports IP-based connections only.
+- **SOCKS4a**: Adds support for domain name resolution through the proxy.
+- **SOCKS5**: Full-featured SOCKS proxy with authentication and DNS support.
 
-```csharp
-var client = new HttpProxyClient(host,port);
-await client.ConnectAsync(targetHost,targetPort);
-```
+## Configuration Options
 
-### Settings
+Each proxy client supports various configurations to fine-tune network behavior, including:
 
-ProxyClient has several settings:
+- **WriteTimeout** and **ReadTimeout**: Specify timeouts for data send/receive operations.
+- **LocalEndPoint**: Set a local endpoint for the connection if required.
+- **NoDelay**: Option to disable the Nagle algorithm for reduced latency in data transmission.
+- **LingerState**: Configure linger behavior for connection closure.
 
+## License
+
+This library is licensed under the MIT License
