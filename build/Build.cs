@@ -118,9 +118,9 @@ class Build : NukeBuild
         });
 
     Target Push => _ => _
+        .DependsOn(Tests)
         .DependsOn(Pack)
         .DependsOn(Validation)
-        .DependsOn(Tests)
         .Requires(() => NugetApiUrl)
         .Requires(() => NugetApiKey)
         .Requires(()=> GithubApiKey)
