@@ -105,6 +105,7 @@ class Build : NukeBuild
         });
 
     Target Pack => _ => _
+        .DependsOn(Clean)
         .DependsOn(Tests)
         .Requires(() => Configuration.Equals(Configuration.Release))
         .Executes(() =>
