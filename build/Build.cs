@@ -51,7 +51,8 @@ class Build : NukeBuild
         .Executes(() =>
         {
             DotNetTest(x =>
-                x.SetProjectFile(Solution.QuickProxyNet_Tests));
+                x.SetProjectFile(Solution.QuickProxyNet_Tests)
+                    .SetConfiguration(Configuration));
         });
 
     Target Clean => _ => _
