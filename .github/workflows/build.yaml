@@ -1,10 +1,9 @@
 ﻿name: release
-on:
-  push:
-    branches:
-      - 'master'
-  pull_request:
+on:  
   workflow_dispatch:
+    inputs: 
+      NugetApiUrl:
+        description: API URL
 
 jobs:
   main:
@@ -19,4 +18,7 @@ jobs:
           dotnet-version: 9.x
       
       
-      
+      - name: Push to NuGet        
+        run: |
+          chmod +x build.sh
+          build.sh Push --NugetApiUrl ${{github.event.inputs.NugetApiUrl}} --NugetApiKey ${{ secrets.NUGET_API_KEY }} --GithubApiKey ${{secrets.GITHUB_TOKEN}}

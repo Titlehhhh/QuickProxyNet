@@ -23,7 +23,7 @@
     
     <PropertyGroup>        
         <PackageIcon>icon.png</PackageIcon>
-        
+        <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
         <PackageReadmeFile>readme.md</PackageReadmeFile>
     </PropertyGroup>
     <ItemGroup>

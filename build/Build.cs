@@ -34,8 +34,8 @@ class Build : NukeBuild
     [GitVersion] readonly GitVersion GitVersion;
 
     [Parameter] string NugetApiUrl = "https://api.nuget.org/v3/index.json";
-    [Parameter] [Secret] string NugetApiKey;
-
+    [Parameter] string NugetApiKey;
+    [Parameter] string GithubApiKey;
     public static int Main() => Execute<Build>(x => x.Compile);
 
     [Parameter("Configuration to build - Default is 'Debug' (local) or 'Release' (server)")]
@@ -100,8 +100,8 @@ class Build : NukeBuild
             NugetDirectory.GlobFiles("*.nupkg")
                 .ForEach(x =>
                 {
-                   var output = ValidationTool.Invoke(x.ToString());
-                   
+                    ValidationTool.Invoke(x.ToString());
+                    
                 });
         });
 
@@ -121,20 +121,24 @@ class Build : NukeBuild
 
     Target Push => _ => _
         .DependsOn(Pack)
+        .DependsOn(Validation)
+        .DependsOn(Tests)
         .Requires(() => NugetApiUrl)
         .Requires(() => NugetApiKey)
+        .Requires(()=> GithubApiKey)
         .Requires(() => Configuration.Equals(Configuration.Release))
         .Executes(() =>
         {
+            string apiKey = NugetApiUrl == "https://api.nuget.org/v3/index.json" ? NugetApiKey : GithubApiKey; 
+            
             NugetDirectory.GlobFiles("*.nupkg")
-                .NotEmpty()
-                // .Where(x => !x.EndsWith("symbols.nupkg"))
                 .ForEach(x =>
                 {
                     DotNetNuGetPush(s => s
                         .SetTargetPath(x)
+                        .EnableSkipDuplicate()
                         .SetSource(NugetApiUrl)
-                        .SetApiKey(NugetApiKey)
+                        .SetApiKey(apiKey)
                     );
                 });
         });
