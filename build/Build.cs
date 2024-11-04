@@ -52,7 +52,7 @@ class Build : NukeBuild
         .Executes(() =>
         {
             DotNetTest(x =>
-                x.SetProjectFile(Solution));
+                x.SetProjectFile(Solution.QuickProxyNet_Tests));
         });
 
     Target Clean => _ => _
