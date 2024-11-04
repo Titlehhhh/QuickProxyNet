@@ -48,7 +48,6 @@ class Build : NukeBuild
     AbsolutePath NugetDirectory => ArtifactsDirectory / "nuget";
 
     Target Tests => _ => _
-        .DependsOn(Compile)
         .Executes(() =>
         {
             DotNetTest(x =>
