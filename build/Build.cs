@@ -52,8 +52,7 @@ class Build : NukeBuild
         .Executes(() =>
         {
             DotNetTest(x =>
-                x.SetProjectFile(Solution)
-                    .SetNoBuild(true));
+                x.SetProjectFile(Solution));
         });
 
     Target Clean => _ => _
