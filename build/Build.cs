@@ -9,6 +9,7 @@ using Nuke.Common.Tooling;
 using Nuke.Common.Tools.DotNet;
 using Nuke.Common.Tools.GitVersion;
 using Nuke.Common.Utilities.Collections;
+using Serilog;
 using static Nuke.Common.EnvironmentInfo;
 using static Nuke.Common.IO.FileSystemTasks;
 using static Nuke.Common.IO.PathConstruction;
@@ -42,17 +43,36 @@ class Build : NukeBuild
     AbsolutePath ArtifactsDirectory => RootDirectory / "artifacts";
     AbsolutePath NugetDirectory => ArtifactsDirectory / "nuget";
 
+    Target Tests => _ => _
+        .DependsOn(Compile)
+        .Executes(() =>
+        {
+            DotNetTest(x =>
+                x.SetProjectFile(Solution)
+                    .SetNoBuild(true));
+        });
+
     Target Clean => _ => _
         .Before(Restore)
         .Executes(() =>
         {
+            ArtifactsDirectory.DeleteDirectory();
+            NugetDirectory.DeleteDirectory();
         });
 
     Target Restore => _ => _
+        .DependsOn(Clean)
         .Executes(() =>
         {
             DotNetRestore(_ => _
                 .SetProjectFile(Solution));
+        });
+
+    Target PrintVersion => _ => _
+        .Executes(() =>
+        {
+            Log.Information(GitVersion.FullSemVer);
+            Log.Information(GitVersion.NuGetVersionV2);
         });
 
     Target Compile => _ => _
@@ -69,17 +89,13 @@ class Build : NukeBuild
         });
 
     Target Pack => _ => _
-        .DependsOn(Compile)
+        .DependsOn(Tests)
+        .Requires(() => Configuration.Equals(Configuration.Release))
         .Executes(() =>
         {
             int commitNum = 0;
             string NuGetVersionCustom = GitVersion.NuGetVersionV2;
 
-            //if it's not a tagged release - append the commit number to the package version
-            //tagged commits on master have versions
-            // - v0.3.0-beta
-            //other commits have
-            // - v0.3.0-beta1
 
             if (Int32.TryParse(GitVersion.CommitsSinceVersionSource, out commitNum))
                 NuGetVersionCustom = commitNum > 0 ? NuGetVersionCustom + $"{commitNum}" : NuGetVersionCustom;
@@ -88,11 +104,7 @@ class Build : NukeBuild
             DotNetPack(s => s
                 .SetProject(Solution.QuickProxyNet)
                 .SetConfiguration(Configuration)
-                .EnableNoBuild()
-                .EnableNoRestore()
                 .SetVersion(NuGetVersionCustom)
-                //.SetDescription("EFcore based Outbox for Eventfully")
-                //.SetPackageTags("messaging servicebus cqrs distributed azureservicebus efcore ddd microservice outbox")
                 .SetNoDependencies(true)
                 .SetOutputDirectory(ArtifactsDirectory / "nuget"));
         });

@@ -5,9 +5,7 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <LangVersion>latest</LangVersion>
-        <MinVerMinimumMajorMinor>0.0</MinVerMinimumMajorMinor>
-        <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-<PackageId>QuickProxyNet</PackageId>
+        <PackageId>QuickProxyNet</PackageId>
         <Authors>Titlehhhh</Authors>
         <Company>Titlehhhh</Company>
         <Description>QuickProxyNet is a high-performance .NET library for connecting to servers via HTTP, HTTPS, SOCKS4, SOCKS4a, and SOCKS5 proxies, providing direct Stream access for low-level network operations.</Description>
@@ -17,14 +15,16 @@
         <RepositoryUrl>https://github.com/Titlehhhh/QuickProxyNet</RepositoryUrl>
         <PackageProjectUrl>https://github.com/Titlehhhh/QuickProxyNet</PackageProjectUrl>
         <PackageIcon>icon.png</PackageIcon>
-
-        <MinVerDefaultPreReleaseIdentifiers>preview.0</MinVerDefaultPreReleaseIdentifiers>
     </PropertyGroup>
 
-
     <ItemGroup>
-        <PackageReference Include="DotNext" Version="5.14.0" />
-        <PackageReference Include="MinVer" Version="6.0.0" PrivateAssets="All" />
+        <None Include="icon.png" Pack="true" PackagePath=""/>
+    </ItemGroup>
+    <ItemGroup>
+        <None Include="Readme.md" Pack="true" PackagePath=""/>
+    </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="DotNext" Version="5.14.0"/>
 
         <PackageReference Include="ConfigureAwait.Fody" Version="3.3.2" PrivateAssets="All"/>
 
@@ -32,7 +32,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <InternalsVisibleTo Include="QuickProxyNet.Tests" />
+        <InternalsVisibleTo Include="QuickProxyNet.Tests"/>
     </ItemGroup>
 
 
