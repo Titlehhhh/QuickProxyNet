@@ -7,7 +7,7 @@ on:
 
 jobs:
   main:
-    runs-on: ubuntu-22.04
+    runs-on: windows-latest
     
     steps:
       - name: Checkout
@@ -19,6 +19,6 @@ jobs:
         with: 
           dotnet-version: 9.x
       
-      - run: chmod +x ./build.sh
+      
       - name: Push to NuGet        
-        run: ./build.sh Push --Confuguration Release --NugetApiUrl ${{github.event.inputs.NugetApiUrl}} --NugetApiKey ${{ secrets.NUGET_API_KEY }} --GithubApiKey ${{secrets.GITHUB_TOKEN}}
+        run: ./build.cmd Push --Confuguration Release --NugetApiUrl ${{github.event.inputs.NugetApiUrl}} --NugetApiKey ${{ secrets.NUGET_API_KEY }} --GithubApiKey ${{secrets.GITHUB_TOKEN}}
