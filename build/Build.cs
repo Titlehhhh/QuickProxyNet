@@ -101,10 +101,7 @@ class Build : NukeBuild
                 .ForEach(x =>
                 {
                    var output = ValidationTool.Invoke(x.ToString());
-                   foreach (var item in output)
-                   {
-                       Console.WriteLine(item.Text);
-                   }
+                   
                 });
         });
 
