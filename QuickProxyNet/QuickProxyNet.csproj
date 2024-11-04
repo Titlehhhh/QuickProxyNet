@@ -6,14 +6,12 @@
         <LangVersion>latest</LangVersion>
     </PropertyGroup>
     <PropertyGroup>
-
         <PackageId>QuickProxyNet</PackageId>
         <Authors>Titlehhhh</Authors>
         <Company>Titlehhhh</Company>
         <Description>QuickProxyNet is a high-performance .NET library for connecting to servers via HTTP, HTTPS, SOCKS4, SOCKS4a, and SOCKS5 proxies, providing direct Stream access for low-level network operations.</Description>
         <PackageTags>proxy;networking;http;socks;high-performance</PackageTags>
         <Copyright>Copyright © Titlehhhh 2024</Copyright>
-        <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <RepositoryUrl>https://github.com/Titlehhhh/QuickProxyNet</RepositoryUrl>
         <PackageProjectUrl>https://github.com/Titlehhhh/QuickProxyNet</PackageProjectUrl>
     </PropertyGroup>
