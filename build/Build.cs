@@ -93,19 +93,12 @@ class Build : NukeBuild
         .Requires(() => Configuration.Equals(Configuration.Release))
         .Executes(() =>
         {
-            int commitNum = 0;
-            string NuGetVersionCustom = GitVersion.NuGetVersionV2;
-
-
-            if (Int32.TryParse(GitVersion.CommitsSinceVersionSource, out commitNum))
-                NuGetVersionCustom = commitNum > 0 ? NuGetVersionCustom + $"{commitNum}" : NuGetVersionCustom;
-
-
             DotNetPack(s => s
                 .SetProject(Solution.QuickProxyNet)
                 .SetConfiguration(Configuration)
-                .SetVersion(NuGetVersionCustom)
+                .SetVersion(GitVersion.NuGetVersionV2)
                 .SetNoDependencies(true)
+                .SetContinuousIntegrationBuild(true)
                 .SetOutputDirectory(ArtifactsDirectory / "nuget"));
         });
 
