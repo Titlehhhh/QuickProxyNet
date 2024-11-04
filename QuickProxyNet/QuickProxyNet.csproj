@@ -1,10 +1,12 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-
     <PropertyGroup>
         <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <LangVersion>latest</LangVersion>
+    </PropertyGroup>
+    <PropertyGroup>
+
         <PackageId>QuickProxyNet</PackageId>
         <Authors>Titlehhhh</Authors>
         <Company>Titlehhhh</Company>
@@ -14,35 +16,32 @@
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <RepositoryUrl>https://github.com/Titlehhhh/QuickProxyNet</RepositoryUrl>
         <PackageProjectUrl>https://github.com/Titlehhhh/QuickProxyNet</PackageProjectUrl>
-        <PackageIcon>icon.png</PackageIcon>
     </PropertyGroup>
-    <ItemGroup>
-        <PackageReference Include="DotNet.ReproducibleBuilds" Version="1.2.4" PrivateAssets="All"/>
-    </ItemGroup>
+    
     <PropertyGroup>
         <GenerateDocumentationFile>True</GenerateDocumentationFile>
-
-        <!-- If all members are not documented, you can disable the compiler warnings -->
         <NoWarn>$(NoWarn);CS1591</NoWarn>
     </PropertyGroup>
-
+    
+    <PropertyGroup>        
+        <PackageIcon>icon.png</PackageIcon>
+        <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
+        <PackageReadmeFile>readme.md</PackageReadmeFile>
+    </PropertyGroup>
     <ItemGroup>
-        <None Include="icon.png" Pack="true" PackagePath=""/>
-    </ItemGroup>
-    <ItemGroup>
-        <None Include="README.md" Pack="true" PackagePath="" />
+        <None Include="$(MSBuildThisFileDirectory)\icon.png" Pack="true" PackagePath="" Visible="false"/>
+        <None Include="$(MSBuildThisFileDirectory)\LICENSE.txt" Pack="true" PackagePath="" Visible="false"/>
+        <None Include="$(MSBuildThisFileDirectory)\readme.md" Pack="true" PackagePath=""/>
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="DotNext" Version="5.14.0"/>
-
-        <PackageReference Include="ConfigureAwait.Fody" Version="3.3.2" PrivateAssets="All"/>
-
         <PackageReference Include="ZString" Version="2.6.0"/>
+        <PackageReference Include="DotNet.ReproducibleBuilds" Version="1.2.4" PrivateAssets="All"/>
+        <PackageReference Include="ConfigureAwait.Fody" Version="3.3.2" PrivateAssets="All"/>
     </ItemGroup>
 
     <ItemGroup>
         <InternalsVisibleTo Include="QuickProxyNet.Tests"/>
     </ItemGroup>
-
 
 </Project>
