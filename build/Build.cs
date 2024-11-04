@@ -26,6 +26,10 @@ class Build : NukeBuild
     [Solution(GenerateProjects = true)]
     readonly Solution Solution;
 
+    [NuGetPackage("Meziantou.Framework.NuGetPackageValidation.Tool",
+        "Meziantou.Framework.NuGetPackageValidation.Tool.dll", Framework = "net8.0")]
+    Tool ValidationTool;
+
     [GitRepository] readonly GitRepository GitRepository;
     [GitVersion] readonly GitVersion GitVersion;
 
@@ -86,6 +90,22 @@ class Build : NukeBuild
                 .SetFileVersion(GitVersion.AssemblySemFileVer)
                 .SetInformationalVersion(GitVersion.InformationalVersion)
                 .EnableNoRestore());
+        });
+
+
+    Target Validation => _ => _
+        .DependsOn(Pack)
+        .Executes(() =>
+        {
+            NugetDirectory.GlobFiles("*.nupkg")
+                .ForEach(x =>
+                {
+                   var output = ValidationTool.Invoke(x.ToString());
+                   foreach (var item in output)
+                   {
+                       Console.WriteLine(item.Text);
+                   }
+                });
         });
 
     Target Pack => _ => _

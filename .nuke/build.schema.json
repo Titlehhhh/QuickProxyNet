@@ -85,7 +85,8 @@
               "PrintVersion",
               "Push",
               "Restore",
-              "Tests"
+              "Tests",
+              "Validation"
             ]
           }
         },
@@ -105,7 +106,8 @@
               "PrintVersion",
               "Push",
               "Restore",
-              "Tests"
+              "Tests",
+              "Validation"
             ]
           }
         },

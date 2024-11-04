@@ -13,6 +13,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageDownload Include="Meziantou.Framework.NuGetPackageValidation.Tool" Version="[1.0.16]" />
     <PackageReference Include="Nuke.Common" Version="7.0.6" />
 	  <PackageDownload Include="GitVersion.Tool" Version="[5.12.0]" />
   </ItemGroup>
