@@ -19,4 +19,4 @@ jobs:
       
       - run: chmod +x ./build.sh
       - name: Push to NuGet        
-        run: build.sh Push --NugetApiUrl ${{github.event.inputs.NugetApiUrl}} --NugetApiKey ${{ secrets.NUGET_API_KEY }} --GithubApiKey ${{secrets.GITHUB_TOKEN}}
+        run: ./build.sh Push --NugetApiUrl ${{github.event.inputs.NugetApiUrl}} --NugetApiKey ${{ secrets.NUGET_API_KEY }} --GithubApiKey ${{secrets.GITHUB_TOKEN}}
