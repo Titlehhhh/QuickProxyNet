@@ -22,7 +22,7 @@ Clone the repository or install via your preferred NuGet package manager (if ava
 
 ## Usage
 
-The library offers a QuickProxyNetFactory class to easily create proxy connections. Here’s a quick guide on how to use it.
+The library offers a ProxyClientFactory class to easily create proxy connections. Here’s a quick guide on how to use it.
 
 ### Example: Creating a Proxy Client
 
