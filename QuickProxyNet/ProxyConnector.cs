@@ -7,7 +7,7 @@ internal static class ProxyConnector
     public static async ValueTask<Stream> ConnectToProxyAsync(Stream stream, Uri proxyUri, string host, int port,
         NetworkCredential? proxyCredentials, CancellationToken cancellationToken)
     {
-        await using (cancellationToken.Register(s => ((Stream)s!).Dispose(), stream))
+        await using (cancellationToken.Register(static s => ((Stream)s!).Dispose(), stream))
         {
             try
             {

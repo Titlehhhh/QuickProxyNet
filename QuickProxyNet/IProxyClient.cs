@@ -9,6 +9,8 @@ namespace QuickProxyNet;
 /// </summary>
 public interface IProxyClient
 {
+    Uri ProxyUri { get; }
+    
     /// <summary>
     /// Gets the credentials used to authenticate with the proxy server, if required.
     /// </summary>
@@ -83,5 +85,5 @@ public interface IProxyClient
     /// <param name="timeout">The maximum time, in milliseconds, to wait for a connection to the host.</param>
     /// <param name="cancellationToken">A cancellation token that can be used to cancel the connection attempt.</param>
     /// <returns>A <see cref="ValueTask"/> representing the asynchronous operation and yielding the connected <see cref="Stream"/>.</returns>
-    ValueTask<Stream> ConnectAsync(string host, int port, int timeout, CancellationToken cancellationToken = default);
+    ValueTask<Stream> ConnectAsync(string host, int port, TimeSpan timeout, CancellationToken cancellationToken = default);
 }

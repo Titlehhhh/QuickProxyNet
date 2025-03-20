@@ -1,4 +1,5 @@
-﻿using System.Globalization;
+﻿using System.Buffers;
+using System.Globalization;
 using System.Net;
 using System.Net.Security;
 using System.Runtime.CompilerServices;
@@ -8,19 +9,17 @@ using System.Text;
 using Cysharp.Text;
 using DotNext;
 using DotNext.Buffers;
+using DotNext.Text;
 
 namespace QuickProxyNet;
 
 internal static class HttpHelper
 {
-    private const int BufferSize = 4096;
+    private static readonly char[] line1 = "Proxy-Authorization: Basic ".ToCharArray();
+    private static readonly char[] newLine = "\r\n".ToCharArray();
 
-    private static void Test(string host, int port)
-    {
-        scoped BufferWriterSlim<char> test1 = new();
-        test1.Interpolate($"asd{host}");
-    }
-
+    private static MemoryAllocator<byte> s_allocator = ArrayPool<byte>.Shared.ToAllocator();
+    private static MemoryAllocator<char> s_allocator_char = ArrayPool<char>.Shared.ToAllocator();
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     private static async ValueTask WriteConnectionCommand(Stream stream, string host, int port,
@@ -34,10 +33,20 @@ internal static class HttpHelper
 
             if (proxyCredentials is not null)
             {
-                var token = Encoding.UTF8.GetBytes(string.Format(CultureInfo.InvariantCulture, "{0}:{1}",
-                    proxyCredentials.UserName, proxyCredentials.Password));
-                var base64 = Convert.ToBase64String(token);
-                builder.AppendFormat("Proxy-Authorization: Basic {0}\r\n", base64);
+                MemoryOwner<byte> token =
+                    Encoding.UTF8.GetBytes($"{proxyCredentials.UserName}:{proxyCredentials.Password}".AsSpan(),
+                        s_allocator);
+
+                int len = (int)(((uint)token.Length + 2) / 3 * 4);
+
+                MemoryOwner<char> chars = s_allocator_char.AllocateExactly(len);
+                Convert.TryToBase64Chars(token.Span, chars.Span, out int written);
+                chars.TryResize(written);
+                builder.Append(line1.AsSpan());
+                builder.Append(chars.Span);
+                builder.Append("\r\n");
+                chars.Dispose();
+                token.Dispose();
             }
 
             builder.Append("\r\n");

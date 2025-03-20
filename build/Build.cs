@@ -99,8 +99,7 @@ class Build : NukeBuild
             NugetDirectory.GlobFiles("*.nupkg")
                 .ForEach(x =>
                 {
-                    ValidationTool.Invoke(x.ToString());
-                    
+                    ValidationTool.Invoke(x.ToString());                    
                 });
         });
 
