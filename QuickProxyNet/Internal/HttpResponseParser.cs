@@ -1,105 +1,111 @@
-﻿using System.Buffers;
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Text;
-using DotNext.Buffers;
 
 namespace QuickProxyNet;
 
-internal struct HttpResponseParser
+internal struct HttpResponseParser : IDisposable
 {
-    private static int BufferSize = 1024;
-    private MemoryOwner<byte> _memory;
-    private static readonly MemoryAllocator<byte> _allocator = ArrayPool<byte>.Shared.ToAllocator();
-    private static readonly byte[] http1_1_200 = "HTTP/1.1 200".Select(x => (byte)x).ToArray();
-    private static readonly byte[] http1_0_200 = "HTTP/1.0 200".Select(x => (byte)x).ToArray();
-    private int _writtenCount = 0;
-    private int _indexEnd = -1;
-    public ReadOnlySpan<byte> Span => _memory.Span.Slice(0, _writtenCount);
+    private const int BufferSize = 1024;
 
-    internal string GetString()
-    {
-        return Encoding.UTF8.GetString(Span);
-    }
+    private byte[] _buffer;
+    private int _writtenCount;
+    private int _indexEnd; // absolute index of '\r\n\r\n' start, or -1
+
+    public ReadOnlySpan<byte> Span => _buffer.AsSpan(0, _writtenCount);
+
     public HttpResponseParser()
     {
-        _memory = _allocator.AllocateExactly(BufferSize);
+        _buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+        _writtenCount = 0;
+        _indexEnd = -1;
     }
 
     public Memory<byte> GetMemory()
     {
-        if (_writtenCount < _memory.Length)
-        {
-            return _memory.Memory.Slice(_writtenCount);
-        }
+        if (_writtenCount < _buffer.Length)
+            return _buffer.AsMemory(_writtenCount);
 
-        _memory.Resize(_writtenCount + BufferSize);
-        return _memory.Memory.Slice(_writtenCount);
+        // Grow: rent a larger buffer, copy, return old
+        byte[] next = ArrayPool<byte>.Shared.Rent(_writtenCount + BufferSize);
+        _buffer.AsSpan(0, _writtenCount).CopyTo(next);
+        ArrayPool<byte>.Shared.Return(_buffer);
+        _buffer = next;
+        return _buffer.AsMemory(_writtenCount);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Parse(int count)
     {
         _writtenCount += count;
-        return ParseHttpEnd(count);
+        return FindEndOfHeaders(count);
     }
 
-    private static readonly byte[] NewLine = "\r\n\r\n".Select(x => (byte)x).ToArray();
+    private static readonly byte[] s_endOfHeaders = "\r\n\r\n"u8.ToArray();
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool ParseHttpEnd(int count)
+    private bool FindEndOfHeaders(int newBytes)
     {
-        int start = _writtenCount - count;
-        int length = count;
+        // Search the new bytes plus up to 3 preceding bytes (to catch \r\n\r\n split across reads)
+        int start = _writtenCount - newBytes;
+        int lookback = Math.Min(3, start);
+        start -= lookback;
+        int length = newBytes + lookback;
 
-        int offset = Math.Min(4, start);
-        start -= offset;
-        length += offset;
-
-        ReadOnlySpan<byte> bytes = _memory.Span.Slice(start, length);
-
-        int index = bytes.IndexOf(NewLine);
+        int index = _buffer.AsSpan(start, length).IndexOf(s_endOfHeaders);
         if (index < 0)
-        {
             return false;
-        }
 
         _indexEnd = index + start;
-
         return true;
     }
 
-    public bool Validate()
+    /// <summary>Returns HTTP status code (e.g. 200, 407), or -1 if response is malformed.</summary>
+    public int GetStatusCode()
     {
-        if (_indexEnd == -1)
-        {
-            throw new InvalidOperationException("No find http response");
-        }
-
         ReadOnlySpan<byte> span = Span;
 
+        // Minimum: "HTTP/1.x NNN" = 12 bytes
+        if (span.Length < 12) return -1;
+        if (!span.StartsWith("HTTP/1."u8)) return -1;
 
-        if (span.Length > (uint)_indexEnd + 4)
+        // Status code occupies bytes 9..11
+        ReadOnlySpan<byte> code = span.Slice(9, 3);
+        if (code[0] < (byte)'0' || code[0] > (byte)'9') return -1;
+        if (code[1] < (byte)'0' || code[1] > (byte)'9') return -1;
+        if (code[2] < (byte)'0' || code[2] > (byte)'9') return -1;
+
+        return (code[0] - '0') * 100 + (code[1] - '0') * 10 + (code[2] - '0');
+    }
+
+    /// <summary>
+    /// True if bytes were read beyond the end of the HTTP response headers.
+    /// These bytes belong to the tunneled connection and must be re-prepended to the stream.
+    /// </summary>
+    public bool HasOverreadBytes => _indexEnd >= 0 && _writtenCount > _indexEnd + 4;
+
+    /// <summary>Returns the bytes read beyond the end of HTTP response headers.</summary>
+    public ReadOnlySpan<byte> OverreadBytes
+    {
+        get
         {
-            return false;
+            if (!HasOverreadBytes) return ReadOnlySpan<byte>.Empty;
+            int start = _indexEnd + 4;
+            return _buffer.AsSpan(start, _writtenCount - start);
         }
-
-        if (span.Length >= 15 && 
-            (span.StartsWith(http1_0_200) || span.StartsWith(http1_1_200)))
-        {
-            return true;
-        }
-
-        return false;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override string ToString()
-    {
-        return Encoding.UTF8.GetString(_memory.Span.Slice(0, _indexEnd + 4));
-    }
+    public override string ToString() =>
+        _indexEnd >= 0
+            ? Encoding.UTF8.GetString(_buffer, 0, _indexEnd + 4)
+            : Encoding.UTF8.GetString(_buffer, 0, _writtenCount);
 
     public void Dispose()
     {
-        _memory.Dispose();
+        byte[] buf = _buffer;
+        _buffer = null!;
+        if (buf is not null)
+            ArrayPool<byte>.Shared.Return(buf);
     }
 }

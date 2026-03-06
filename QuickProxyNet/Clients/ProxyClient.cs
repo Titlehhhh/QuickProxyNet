@@ -96,10 +96,11 @@ public abstract class ProxyClient : IProxyClient
         var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
         {
             NoDelay = this.NoDelay,
-            LingerState = this.LingerState,
             SendTimeout = this.WriteTimeout,
             ReceiveTimeout = this.ReadTimeout
         };
+        if (LingerState is not null)
+            socket.LingerState = LingerState;
         if (LocalEndPoint is not null)
             socket.Bind(LocalEndPoint);
         return socket;
@@ -147,7 +148,7 @@ public abstract class ProxyClient : IProxyClient
         cancellationToken.ThrowIfCancellationRequested();
 
         var socket = CreateSocket();
-        await using var reg = cancellationToken.Register(s => ((IDisposable)s).Dispose(), socket);
+        await using var reg = cancellationToken.Register(static s => ((IDisposable?)s)?.Dispose(), socket);
         
         await using ITimer timer =
             TimeProvider.System.CreateTimer(OnDisposeSocket, socket, timeout, Timeout.InfiniteTimeSpan);

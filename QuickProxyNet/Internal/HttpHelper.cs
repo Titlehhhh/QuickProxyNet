@@ -1,101 +1,140 @@
-﻿using System.Buffers;
-using System.Globalization;
+using System.Buffers;
 using System.Net;
-using System.Net.Security;
 using System.Runtime.CompilerServices;
-using System.Security.Authentication;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using Cysharp.Text;
-using DotNext;
-using DotNext.Buffers;
-using DotNext.Text;
 
 namespace QuickProxyNet;
 
 internal static class HttpHelper
 {
-    private static readonly char[] line1 = "Proxy-Authorization: Basic ".ToCharArray();
-    private static readonly char[] newLine = "\r\n".ToCharArray();
-
-    private static MemoryAllocator<byte> s_allocator = ArrayPool<byte>.Shared.ToAllocator();
-    private static MemoryAllocator<char> s_allocator_char = ArrayPool<char>.Shared.ToAllocator();
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    private static async ValueTask WriteConnectionCommand(Stream stream, string host, int port,
-        NetworkCredential? proxyCredentials, CancellationToken cancellationToken)
+    // Sync: builds the CONNECT command bytes.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static byte[] BuildConnectionCommand(string host, int port, NetworkCredential? credentials)
     {
-        var builder = ZString.CreateUtf8StringBuilder();
-        try
+        var sb = new StringBuilder(256);
+        sb.Append("CONNECT ").Append(host).Append(':').Append(port)
+          .Append(" HTTP/1.1\r\nHost: ").Append(host).Append(':').Append(port).Append("\r\n");
+
+        if (credentials is not null)
         {
-            builder.AppendFormat("CONNECT {0}:{1} HTTP/1.1\r\n", host, port);
-            builder.AppendFormat("Host: {0}:{1}\r\n", host, port);
-
-            if (proxyCredentials is not null)
-            {
-                MemoryOwner<byte> token =
-                    Encoding.UTF8.GetBytes($"{proxyCredentials.UserName}:{proxyCredentials.Password}".AsSpan(),
-                        s_allocator);
-
-                int len = (int)(((uint)token.Length + 2) / 3 * 4);
-
-                MemoryOwner<char> chars = s_allocator_char.AllocateExactly(len);
-                Convert.TryToBase64Chars(token.Span, chars.Span, out int written);
-                chars.TryResize(written);
-                builder.Append(line1.AsSpan());
-                builder.Append(chars.Span);
-                builder.Append("\r\n");
-                chars.Dispose();
-                token.Dispose();
-            }
-
-            builder.Append("\r\n");
-
-
-            await stream.WriteAsync(builder.AsMemory(), cancellationToken);
+            byte[] credBytes = Encoding.UTF8.GetBytes($"{credentials.UserName}:{credentials.Password}");
+            sb.Append("Proxy-Authorization: Basic ")
+              .Append(Convert.ToBase64String(credBytes))
+              .Append("\r\n");
         }
-        finally
-        {
-            builder.Dispose();
-        }
+
+        sb.Append("\r\n");
+        return Encoding.UTF8.GetBytes(sb.ToString());
     }
 
-
-    internal static async ValueTask<Stream> EstablishHttpTunnelAsync(Stream stream, Uri proxyUri, string host, int port,
-        NetworkCredential? credentials, CancellationToken cancellationToken)
+    internal static async ValueTask<Stream> EstablishHttpTunnelAsync(Stream stream, Uri proxyUri, string host,
+        int port, NetworkCredential? credentials, CancellationToken cancellationToken)
     {
-        await WriteConnectionCommand(stream, host, port, credentials, cancellationToken);
-
+        byte[] cmd = BuildConnectionCommand(host, port, credentials);
+        await stream.WriteAsync(cmd.AsMemory(), cancellationToken);
 
         var parser = new HttpResponseParser();
         try
         {
-            bool find;
+            bool found;
             do
             {
                 var memory = parser.GetMemory();
-                var nread = await stream.ReadAsync(memory, cancellationToken);
+                int nread = await stream.ReadAsync(memory, cancellationToken);
                 if (nread <= 0)
-                    throw new EndOfStreamException();
-                find = parser.Parse(nread);
-            } while (find == false);
+                    throw new EndOfStreamException("Proxy closed connection unexpectedly.");
+                found = parser.Parse(nread);
+            } while (!found);
 
-            bool isValid = parser.Validate();
-#if DEBUG
-            string response = parser.ToString();
-#endif
-
-
-            if (!isValid)
+            int statusCode = parser.GetStatusCode();
+            switch (statusCode)
             {
-                throw new ProxyProtocolException($"Failed to connect {host}:{port}");
+                case 200:
+                    if (parser.HasOverreadBytes)
+                    {
+                        byte[] overread = parser.OverreadBytes.ToArray();
+                        return new PrefixedStream(overread, stream);
+                    }
+                    return stream;
+                case 407:
+                    throw new ProxyProtocolException(
+                        $"Proxy authentication required (407) for {host}:{port}.");
+                case -1:
+                    throw new ProxyProtocolException("Proxy returned an invalid HTTP response.");
+                default:
+                    throw new ProxyProtocolException(
+                        $"Proxy CONNECT failed with HTTP {statusCode} for {host}:{port}.");
             }
-
-            return stream;
         }
         finally
         {
             parser.Dispose();
         }
+    }
+
+    private sealed class PrefixedStream(byte[] prefix, Stream inner) : Stream
+    {
+        private int _offset;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => inner.CanWrite;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() => inner.Flush();
+        public override Task FlushAsync(CancellationToken ct) => inner.FlushAsync(ct);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (_offset < prefix.Length)
+            {
+                int count = Math.Min(buffer.Length, prefix.Length - _offset);
+                prefix.AsSpan(_offset, count).CopyTo(buffer);
+                _offset += count;
+                return count;
+            }
+            return inner.Read(buffer);
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            Read(buffer.AsSpan(offset, count));
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            if (_offset < prefix.Length)
+            {
+                int count = Math.Min(buffer.Length, prefix.Length - _offset);
+                prefix.AsMemory(_offset, count).CopyTo(buffer);
+                _offset += count;
+                return count;
+            }
+            return await inner.ReadAsync(buffer, ct);
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>
+            ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
+
+        public override void Write(byte[] buffer, int offset, int count) => inner.Write(buffer, offset, count);
+        public override void Write(ReadOnlySpan<byte> buffer) => inner.Write(buffer);
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default) =>
+            inner.WriteAsync(buffer, ct);
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>
+            inner.WriteAsync(buffer, offset, count, ct);
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) inner.Dispose();
+            base.Dispose(disposing);
+        }
+
+        public override ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 }

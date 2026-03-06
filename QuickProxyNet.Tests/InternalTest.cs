@@ -1,6 +1,4 @@
 ﻿using System.Text;
-using DotNext.Buffers;
-using Span = DotNext.Span;
 
 namespace QuickProxyNet.Tests;
 
@@ -29,7 +27,7 @@ public class HttpResponseParserTest
 
             Assert.True(b);
 
-            Assert.Equal(sb.ToString(), parser.GetString());
+            Assert.Equal(sb.ToString(), parser.ToString());
         }
         finally
         {
@@ -60,7 +58,7 @@ public class HttpResponseParserTest
 
             Assert.True(b);
 
-            Assert.Equal(sb.ToString(), parser.GetString());
+            Assert.Equal(sb.ToString(), parser.ToString());
         }
         finally
         {
@@ -91,7 +89,7 @@ public class HttpResponseParserTest
 
             Assert.False(b);
 
-            Assert.Equal(sb.ToString(), parser.GetString());
+            Assert.Equal(sb.ToString(), parser.ToString());
         }
         finally
         {
@@ -122,7 +120,7 @@ public class HttpResponseParserTest
 
             writtenBytes.CopyTo(memory.Span);
             bool b = parser.Parse(writtenBytes.Length);
-            string gg = parser.GetString();
+            string gg = parser.ToString();
 
             bytes = bytes.Slice(length);
 
@@ -130,7 +128,7 @@ public class HttpResponseParserTest
                 break;
         }
 
-        bool isValid = parser.Validate();
+        bool isValid = parser.GetStatusCode() == 200;
 
         Assert.True(isValid);
         Assert.Equal(sb.ToString(), parser.ToString());
