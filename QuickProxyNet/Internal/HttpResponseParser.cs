@@ -1,5 +1,4 @@
 using System.Buffers;
-using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace QuickProxyNet;
@@ -34,7 +33,7 @@ internal struct HttpResponseParser : IDisposable
         return _buffer.AsMemory(_writtenCount);
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+
     public bool Parse(int count)
     {
         _writtenCount += count;
@@ -43,7 +42,7 @@ internal struct HttpResponseParser : IDisposable
 
     private static readonly byte[] s_endOfHeaders = "\r\n\r\n"u8.ToArray();
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+
     private bool FindEndOfHeaders(int newBytes)
     {
         // Search the new bytes plus up to 3 preceding bytes (to catch \r\n\r\n split across reads)
@@ -95,7 +94,7 @@ internal struct HttpResponseParser : IDisposable
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+
     public override string ToString() =>
         _indexEnd >= 0
             ? Encoding.UTF8.GetString(_buffer, 0, _indexEnd + 4)

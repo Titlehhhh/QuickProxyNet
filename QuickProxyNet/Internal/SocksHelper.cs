@@ -3,7 +3,6 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace QuickProxyNet;
@@ -52,7 +51,7 @@ internal static class SocksHelper
                 buffer[3] = METHOD_USERNAME_PASSWORD;
             }
 
-            await WriteAsync(stream, buffer.AsMemory(0, buffer[1] + 2), cancellationToken).ConfigureAwait(false);
+            await stream.WriteAsync(buffer.AsMemory(0, buffer[1] + 2), cancellationToken).ConfigureAwait(false);
 
             // +----+--------+
             // |VER | METHOD |
@@ -89,7 +88,7 @@ internal static class SocksHelper
                     var passwordLength = EncodeString(credentials.Password, buffer.AsSpan(3 + usernameLength),
                         nameof(credentials.Password));
                     buffer[2 + usernameLength] = passwordLength;
-                    await WriteAsync(stream, buffer.AsMemory(0, 3 + usernameLength + passwordLength), cancellationToken)
+                    await stream.WriteAsync(buffer.AsMemory(0, 3 + usernameLength + passwordLength), cancellationToken)
                         .ConfigureAwait(false);
 
                     // +----+--------+
@@ -146,7 +145,7 @@ internal static class SocksHelper
 
             BinaryPrimitives.WriteUInt16BigEndian(buffer.AsSpan(addressLength + 4), (ushort)port);
 
-            await WriteAsync(stream, buffer.AsMemory(0, addressLength + 6), cancellationToken).ConfigureAwait(false);
+            await stream.WriteAsync(buffer.AsMemory(0, addressLength + 6), cancellationToken).ConfigureAwait(false);
 
             // +----+-----+-------+------+----------+----------+
             // |VER | REP |  RSV  | ATYP | DST.ADDR | DST.PORT |
@@ -248,7 +247,7 @@ internal static class SocksHelper
                 totalLength += hostLength + 1;
             }
 
-            await WriteAsync(stream, buffer.AsMemory(0, totalLength), cancellationToken).ConfigureAwait(false);
+            await stream.WriteAsync(buffer.AsMemory(0, totalLength), cancellationToken).ConfigureAwait(false);
 
             // +----+----+----+----+----+----+----+----+
             // | VN | CD | DSTPORT |      DSTIP        |
@@ -296,9 +295,5 @@ internal static class SocksHelper
                 $"Unexpected SOCKS protocol version. Required {expected}, got {version}.");
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ValueTask WriteAsync(Stream stream, Memory<byte> buffer, CancellationToken cancellationToken)
-    {
-        return stream.WriteAsync(buffer, cancellationToken);
-    }
+
 }

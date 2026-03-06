@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Security;
-using System.Runtime.CompilerServices;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 
@@ -51,7 +50,6 @@ public class HttpsProxyClient : ProxyClient
     private static bool DefaultValidation(object sender, X509Certificate? certificate, X509Chain? chain,
         SslPolicyErrors sslPolicyErrors) => sslPolicyErrors == SslPolicyErrors.None;
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public override async ValueTask<Stream> ConnectAsync(Stream stream, string host, int port,
         CancellationToken cancellationToken = default)
     {

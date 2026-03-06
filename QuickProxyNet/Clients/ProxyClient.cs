@@ -1,6 +1,5 @@
 ﻿using System.Net;
 using System.Net.Sockets;
-using System.Runtime.CompilerServices;
 
 namespace QuickProxyNet;
 
@@ -90,7 +89,6 @@ public abstract class ProxyClient : IProxyClient
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Socket CreateSocket()
     {
         var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
