@@ -55,11 +55,12 @@ build/                   — Nuke build automation
 
 | Package | Purpose |
 |---|---|
-| `DotNext` 5.25.x | Advanced .NET utilities (buffers, memory, text) |
-| `DotNext.IO` 5.25.x | I/O pipeline utilities, `SpanWriter<T>` |
-| `ZString` 2.6.0 | Zero-alloc string building (Cysharp) |
-| `ConfigureAwait.Fody` | IL weaving — ConfigureAwait on all awaits |
+| `MinVer` 6.0.0 | Versioning from git tags (no config needed) |
+| `ConfigureAwait.Fody` 3.3.2 | IL weaving — ConfigureAwait on all awaits |
+| `DotNet.ReproducibleBuilds` 1.2.4 | Deterministic builds |
 | `System.IO.Pipelines` | Pipelines project only |
+
+BCL-only for protocol logic — no external runtime dependencies.
 
 ## Code Style & Patterns
 
@@ -72,8 +73,8 @@ build/                   — Nuke build automation
 - **`ArrayPool<byte>.Shared.Rent/Return`** for temporary buffers
 - **`stackalloc`** for small stack buffers (`stackalloc char[256]`)
 - **`ReadOnlySpan<T>` / `Memory<T>`** for buffer slices
-- **`SpanWriter<byte>`** (from DotNext) for binary protocol writing
-- **`[MethodImpl(AggressiveInlining | AggressiveOptimization)]`** on hot paths
+- **`Utf8Formatter.TryFormat`** for int→UTF-8 without alloc
+- **`Base64.EncodeToUtf8`** for base64 directly to byte span
 - **`PreallocatedStream`** pattern to recycle response buffers without allocation
 - **`BinaryPrimitives.WriteUInt16BigEndian`** for big-endian network byte order
 
@@ -105,7 +106,29 @@ Pack       # Create NuGet package (Release mode)
 Push       # Publish to NuGet / GitHub Packages
 ```
 
-Versioning: **GitVersion** 5.12.0 (git-based semantic versioning).
+Versioning: **MinVer** 6.0.0 — version is derived from git tags automatically.
+
+## CI/CD (GitHub Actions)
+
+Two workflows in `.github/workflows/`:
+
+### `build.yaml` — Build & Test
+- **Triggers:** push to `master`, PRs to `master`
+- **Steps:** restore → build → test
+- Runs on `ubuntu-latest` with .NET 8.x + 9.x
+
+### `publish.yaml` — Publish to NuGet
+- **Triggers:** push tag `v*` (e.g. `v1.2.3`)
+- **Steps:** restore → build → test → pack → push to nuget.org
+- Uses `fetch-depth: 0` so MinVer can read tag history
+- **Required secret:** `NUGET_API_KEY` (repo Settings → Secrets → Actions)
+
+### Release workflow
+```bash
+git tag v1.2.3
+git push origin v1.2.3
+# GitHub Actions automatically builds, tests, packs, and publishes to NuGet
+```
 
 ## Testing
 
@@ -137,7 +160,7 @@ The `QuickProxyNet.Pipelines/` project rewrites the internals using `System.IO.P
 3. **Always release `ArrayPool` rentals** in `finally` blocks.
 4. **Public API must be XML-documented** — `GenerateDocumentationFile` is enabled.
 5. **ConfigureAwait** is handled by Fody weaving — do not add manually.
-6. **Multi-targeting** — changes in `QuickProxyNet/` must be compatible with net8, net9, net10.
+6. **Multi-targeting** — changes in `QuickProxyNet/` must be compatible with net8.0, net9.0, and net10.0.
 7. **`ProxyErrorCode`** — add new codes there before throwing new exception types.
 8. When editing protocol logic, validate against the relevant RFC:
    - SOCKS4/4a: no official RFC, de-facto standard

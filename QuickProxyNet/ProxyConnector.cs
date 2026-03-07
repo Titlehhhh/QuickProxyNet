@@ -1,4 +1,7 @@
 ﻿using System.Net;
+using System.Net.Security;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 
 namespace QuickProxyNet;
 
@@ -43,7 +46,24 @@ internal static class ProxyConnector
                     return result;
                 }
 
-                throw new NotSupportedException("Bad protocol");
+                if (string.Equals(proxyUri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
+                {
+                    var ssl = new SslStream(stream, false);
+                    try
+                    {
+                        await ssl.AuthenticateAsClientAsync(DefaultSslOptions(proxyUri.Host), cancellationToken);
+                    }
+                    catch
+                    {
+                        ssl.Dispose();
+                        throw;
+                    }
+
+                    return await HttpHelper.EstablishHttpTunnelAsync(ssl, proxyUri, host, port, credentials,
+                        cancellationToken);
+                }
+
+                throw new NotSupportedException($"Unsupported proxy scheme: {proxyUri.Scheme}");
             }
             catch
             {
@@ -52,4 +72,10 @@ internal static class ProxyConnector
             }
         }
     }
+
+    private static SslClientAuthenticationOptions DefaultSslOptions(string targetHost) => new()
+    {
+        EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+        TargetHost = targetHost
+    };
 }

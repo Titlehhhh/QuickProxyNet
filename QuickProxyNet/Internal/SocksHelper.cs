@@ -74,7 +74,7 @@ internal static class SocksHelper
                         // If the server is behaving well, it shouldn't pick username and password auth
                         // because we don't claim to support it when we don't have credentials.
                         // Just being defensive here.
-                        throw new ProxyProtocolException("SOCKS server requested username & password authentication.");
+                        throw new ProxyProtocolException(ProxyErrorCode.AuthRequired, "SOCKS server requested username & password authentication.");
 
                     // +----+------+----------+------+----------+
                     // |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
@@ -98,12 +98,12 @@ internal static class SocksHelper
                     // +----+--------+
                     await stream.ReadExactlyAsync(buffer.AsMemory(0, 2), cancellationToken).ConfigureAwait(false);
                     if (buffer[0] != SubnegotiationVersion || buffer[1] != Socks5_Success)
-                        throw new ProxyProtocolException("Failed to authenticate with the SOCKS server.");
+                        throw new ProxyProtocolException(ProxyErrorCode.AuthFailed, "Failed to authenticate with the SOCKS server.");
                     break;
                 }
 
                 default:
-                    throw new ProxyProtocolException("SOCKS server did not return a suitable authentication method.");
+                    throw new ProxyProtocolException(ProxyErrorCode.SocksNoAuthMethod, "SOCKS server did not return a suitable authentication method.");
             }
 
 
@@ -155,13 +155,13 @@ internal static class SocksHelper
             await stream.ReadExactlyAsync(buffer.AsMemory(0, 5), cancellationToken).ConfigureAwait(false);
             VerifyProtocolVersion(ProtocolVersion5, buffer[0]);
             if (buffer[1] != Socks5_Success)
-                throw new ProxyProtocolException("SOCKS server failed to connect to the destination.");
+                throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed, "SOCKS server failed to connect to the destination.");
             var bytesToSkip = buffer[3] switch
             {
                 ATYP_IPV4 => 5,
                 ATYP_IPV6 => 17,
                 ATYP_DOMAIN_NAME => buffer[4] + 2,
-                _ => throw new ProxyProtocolException("SOCKS server returned an unknown address type.")
+                _ => throw new ProxyProtocolException(ProxyErrorCode.SocksBadAddressType, "SOCKS server returned an unknown address type.")
             };
             await stream.ReadExactlyAsync(buffer.AsMemory(0, bytesToSkip), cancellationToken).ConfigureAwait(false);
             // response address not used
@@ -198,7 +198,7 @@ internal static class SocksHelper
                 else if (hostIP.IsIPv4MappedToIPv6)
                     ipv4Address = hostIP.MapToIPv4();
                 else
-                    throw new ProxyProtocolException("SOCKS4 does not support IPv6 addresses.");
+                    throw new ProxyProtocolException(ProxyErrorCode.SocksIPv6NotSupported, "SOCKS4 does not support IPv6 addresses.");
             }
             else if (!isVersion4a)
             {
@@ -212,11 +212,11 @@ internal static class SocksHelper
                 }
                 catch (Exception ex)
                 {
-                    throw new ProxyProtocolException("Failed to resolve the destination host to an IPv4 address.s", ex);
+                    throw new ProxyProtocolException(ProxyErrorCode.SocksNoIPv4Address, "Failed to resolve the destination host to an IPv4 address.", ex);
                 }
 
                 if (addresses.Length == 0)
-                    throw new ProxyProtocolException("Failed to resolve the destination host to an IPv4 address.s");
+                    throw new ProxyProtocolException(ProxyErrorCode.SocksNoIPv4Address, "Failed to resolve the destination host to an IPv4 address.");
 
                 ipv4Address = addresses[0];
             }
@@ -263,9 +263,9 @@ internal static class SocksHelper
                     // Nothing to do
                     break;
                 case Socks4_AuthFailed:
-                    throw new ProxyProtocolException("Failed to authenticate with the SOCKS server.");
+                    throw new ProxyProtocolException(ProxyErrorCode.AuthFailed, "Failed to authenticate with the SOCKS server.");
                 default:
-                    throw new ProxyProtocolException("SOCKS server failed to connect to the destination.");
+                    throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed, "SOCKS server failed to connect to the destination.");
             }
             // response address not used
         }
@@ -284,14 +284,14 @@ internal static class SocksHelper
         catch
         {
             Debug.Assert(Encoding.UTF8.GetByteCount(chars) > 255);
-            throw new ProxyProtocolException($"Encoding the {parameterName} took more than the maximum of 255 bytes");
+            throw new ProxyProtocolException(ProxyErrorCode.SocksStringTooLong, $"Encoding the {parameterName} took more than the maximum of 255 bytes");
         }
     }
 
     private static void VerifyProtocolVersion(byte expected, byte version)
     {
         if (expected != version)
-            throw new ProxyProtocolException(
+            throw new ProxyProtocolException(ProxyErrorCode.SocksUnexpectedVersion,
                 $"Unexpected SOCKS protocol version. Required {expected}, got {version}.");
     }
 

@@ -11,7 +11,7 @@ public sealed class ProxyClientFactory
     /// <summary>
     /// Gets a singleton instance of the ProxyClientFactory.
     /// </summary>
-    public static ProxyClientFactory Instance => new();
+    public static ProxyClientFactory Instance { get; } = new();
 
     /// <summary>
     /// Creates an IProxyClient instance based on the provided URI, automatically determining the proxy type

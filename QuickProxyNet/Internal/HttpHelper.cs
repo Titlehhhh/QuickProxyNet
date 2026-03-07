@@ -118,12 +118,13 @@ internal static class HttpHelper
                     }
                     return stream;
                 case 407:
-                    throw new ProxyProtocolException(
+                    throw new ProxyProtocolException(ProxyErrorCode.AuthRequired,
                         $"Proxy authentication required (407) for {host}:{port}.");
                 case -1:
-                    throw new ProxyProtocolException("Proxy returned an invalid HTTP response.");
+                    throw new ProxyProtocolException(ProxyErrorCode.InvalidResponse,
+                        "Proxy returned an invalid HTTP response.");
                 default:
-                    throw new ProxyProtocolException(
+                    throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
                         $"Proxy CONNECT failed with HTTP {statusCode} for {host}:{port}.");
             }
         }

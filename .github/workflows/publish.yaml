@@ -1,16 +1,16 @@
-name: Build & Test
+name: Publish to NuGet
 
 on:
   push:
-    branches: [master]
-  pull_request:
-    branches: [master]
+    tags: ["v*"]
 
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -27,3 +27,9 @@ jobs:
 
       - name: Test
         run: dotnet test --no-build -c Release
+
+      - name: Pack
+        run: dotnet pack QuickProxyNet/QuickProxyNet.csproj --no-build -c Release -o artifacts
+
+      - name: Push to NuGet
+        run: dotnet nuget push artifacts/*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
