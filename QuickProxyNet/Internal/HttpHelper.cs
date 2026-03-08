@@ -103,7 +103,8 @@ internal static class HttpHelper
                 var memory = parser.GetMemory();
                 int nread = await stream.ReadAsync(memory, cancellationToken);
                 if (nread <= 0)
-                    throw new EndOfStreamException("Proxy closed connection unexpectedly.");
+                    throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
+                        $"Proxy closed connection unexpectedly while establishing tunnel to {host}:{port}.");
                 found = parser.Parse(nread);
             } while (!found);
 

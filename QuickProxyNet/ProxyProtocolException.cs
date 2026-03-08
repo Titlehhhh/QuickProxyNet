@@ -50,5 +50,7 @@ public enum ProxyErrorCode
     /// <summary>SOCKS4 does not support IPv6 addresses.</summary>
     SocksIPv6NotSupported,
     /// <summary>Failed to resolve host to an IPv4 address (required for SOCKS4).</summary>
-    SocksNoIPv4Address
+    SocksNoIPv4Address,
+    /// <summary>The proxy connection timed out.</summary>
+    Timeout
 }

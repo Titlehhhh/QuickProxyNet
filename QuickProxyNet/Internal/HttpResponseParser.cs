@@ -7,6 +7,12 @@ internal struct HttpResponseParser : IDisposable
 {
     private const int BufferSize = 1024;
 
+    /// <summary>
+    /// Maximum allowed response header size (16 KB).
+    /// Prevents unbounded memory growth if a malicious proxy sends endless data without \r\n\r\n.
+    /// </summary>
+    private const int MaxHeaderSize = 16 * 1024;
+
     private byte[] _buffer;
     private int _writtenCount;
     private int _indexEnd; // absolute index of '\r\n\r\n' start, or -1
@@ -22,6 +28,10 @@ internal struct HttpResponseParser : IDisposable
 
     public Memory<byte> GetMemory()
     {
+        if (_writtenCount >= MaxHeaderSize)
+            throw new ProxyProtocolException(ProxyErrorCode.InvalidResponse,
+                $"Proxy response headers exceeded the maximum allowed size of {MaxHeaderSize} bytes.");
+
         if (_writtenCount < _buffer.Length)
             return _buffer.AsMemory(_writtenCount);
 

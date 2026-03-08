@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 
 namespace QuickProxyNet;
 
@@ -89,19 +90,33 @@ public static class Proxy
         };
 
         ITimer? timer = null;
+        StrongBox<bool>? timedOut = null;
         if (timeout.HasValue)
-            timer = TimeProvider.System.CreateTimer(static s => ((Socket)s!).Dispose(), socket,
-                timeout.Value, Timeout.InfiniteTimeSpan);
+        {
+            timedOut = new StrongBox<bool>(false);
+            timer = TimeProvider.System.CreateTimer(
+                static s =>
+                {
+                    var state = (Tuple<Socket, StrongBox<bool>>)s!;
+                    Volatile.Write(ref state.Item2.Value, true);
+                    state.Item1.Dispose();
+                },
+                Tuple.Create(socket, timedOut), timeout.Value, Timeout.InfiniteTimeSpan);
+        }
 
         try
         {
             await socket.ConnectAsync(proxyUri.Host, proxyUri.Port, cancellationToken);
         }
-        catch
+        catch (Exception ex)
         {
             if (timer is not null) await timer.DisposeAsync();
             socket.Dispose();
-            throw;
+            if (timedOut is not null && Volatile.Read(ref timedOut.Value))
+                throw new ProxyProtocolException(ProxyErrorCode.Timeout,
+                    $"Connection to proxy {proxyUri.Host}:{proxyUri.Port} timed out after {timeout!.Value}.", ex);
+            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
+                $"Failed to connect to proxy {proxyUri.Host}:{proxyUri.Port} for target {host}:{port}.", ex);
         }
 
         var stream = new NetworkStream(socket, ownsSocket: true);
@@ -109,17 +124,19 @@ public static class Proxy
         {
             var result = await ProxyConnector.ConnectToProxyAsync(stream, proxyUri, host, port, credentials,
                 cancellationToken);
+            // Dispose timer before returning to prevent race where timer fires
+            // and destroys the socket after we hand the stream to the caller.
+            if (timer is not null) await timer.DisposeAsync();
             return result;
         }
-        catch
+        catch (Exception ex)
         {
             if (timer is not null) await timer.DisposeAsync();
             await stream.DisposeAsync();
+            if (timedOut is not null && Volatile.Read(ref timedOut.Value))
+                throw new ProxyProtocolException(ProxyErrorCode.Timeout,
+                    $"Connection to proxy {proxyUri.Host}:{proxyUri.Port} timed out after {timeout!.Value}.", ex);
             throw;
-        }
-        finally
-        {
-            if (timer is not null) await timer.DisposeAsync();
         }
     }
 

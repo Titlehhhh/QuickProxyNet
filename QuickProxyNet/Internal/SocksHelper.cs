@@ -97,7 +97,10 @@ internal static class SocksHelper
                     // | 1  |   1    |
                     // +----+--------+
                     await stream.ReadExactlyAsync(buffer.AsMemory(0, 2), cancellationToken).ConfigureAwait(false);
-                    if (buffer[0] != SubnegotiationVersion || buffer[1] != Socks5_Success)
+                    if (buffer[0] != SubnegotiationVersion)
+                        throw new ProxyProtocolException(ProxyErrorCode.SocksUnexpectedVersion,
+                            $"Unexpected SOCKS5 auth subnegotiation version. Expected {SubnegotiationVersion}, got {buffer[0]}.");
+                    if (buffer[1] != Socks5_Success)
                         throw new ProxyProtocolException(ProxyErrorCode.AuthFailed, "Failed to authenticate with the SOCKS server.");
                     break;
                 }
@@ -155,7 +158,8 @@ internal static class SocksHelper
             await stream.ReadExactlyAsync(buffer.AsMemory(0, 5), cancellationToken).ConfigureAwait(false);
             VerifyProtocolVersion(ProtocolVersion5, buffer[0]);
             if (buffer[1] != Socks5_Success)
-                throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed, "SOCKS server failed to connect to the destination.");
+                throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
+                    $"SOCKS5 server rejected connection to {host}:{port} (reply code: 0x{buffer[1]:X2}).");
             var bytesToSkip = buffer[3] switch
             {
                 ATYP_IPV4 => 5,
@@ -257,6 +261,10 @@ internal static class SocksHelper
 
             await stream.ReadExactlyAsync(buffer.AsMemory(0, 8), cancellationToken).ConfigureAwait(false);
 
+            if (buffer[0] != 0)
+                throw new ProxyProtocolException(ProxyErrorCode.SocksUnexpectedVersion,
+                    $"Unexpected SOCKS4 reply version. Expected 0, got {buffer[0]}.");
+
             switch (buffer[1])
             {
                 case Socks4_Success:
@@ -281,7 +289,7 @@ internal static class SocksHelper
         {
             return checked((byte)Encoding.UTF8.GetBytes(chars, buffer));
         }
-        catch
+        catch (ArgumentException)
         {
             Debug.Assert(Encoding.UTF8.GetByteCount(chars) > 255);
             throw new ProxyProtocolException(ProxyErrorCode.SocksStringTooLong, $"Encoding the {parameterName} took more than the maximum of 255 bytes");

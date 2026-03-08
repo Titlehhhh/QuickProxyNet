@@ -52,15 +52,16 @@ internal static class ProxyConnector
                     try
                     {
                         await ssl.AuthenticateAsClientAsync(DefaultSslOptions(proxyUri.Host), cancellationToken);
+                        return await HttpHelper.EstablishHttpTunnelAsync(ssl, proxyUri, host, port, credentials,
+                            cancellationToken);
                     }
                     catch
                     {
-                        ssl.Dispose();
+                        await ssl.DisposeAsync().ConfigureAwait(false);
+                        // SslStream(leaveOpen:false) disposes inner stream,
+                        // so skip the outer catch to avoid double-dispose.
                         throw;
                     }
-
-                    return await HttpHelper.EstablishHttpTunnelAsync(ssl, proxyUri, host, port, credentials,
-                        cancellationToken);
                 }
 
                 throw new NotSupportedException($"Unsupported proxy scheme: {proxyUri.Scheme}");
