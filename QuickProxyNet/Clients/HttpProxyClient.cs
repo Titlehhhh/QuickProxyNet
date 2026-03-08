@@ -1,5 +1,4 @@
 ﻿using System.Net;
-using System.Runtime.CompilerServices;
 
 namespace QuickProxyNet;
 
@@ -19,7 +18,6 @@ public class HttpProxyClient : ProxyClient
 
     public override ProxyType Type => ProxyType.Http;
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public override async ValueTask<Stream> ConnectAsync(Stream stream, string host, int port,
         CancellationToken cancellationToken = default)
     {

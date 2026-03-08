@@ -7,7 +7,6 @@ using Nuke.Common.IO;
 using Nuke.Common.ProjectModel;
 using Nuke.Common.Tooling;
 using Nuke.Common.Tools.DotNet;
-using Nuke.Common.Tools.GitVersion;
 using Nuke.Common.Utilities.Collections;
 using Serilog;
 using static Nuke.Common.EnvironmentInfo;
@@ -31,7 +30,6 @@ class Build : NukeBuild
     Tool ValidationTool;
 
     [GitRepository] readonly GitRepository GitRepository;
-    [GitVersion] readonly GitVersion GitVersion;
 
     [Parameter] string NugetApiUrl = "https://api.nuget.org/v3/index.json";
     [Parameter] string NugetApiKey;
@@ -71,13 +69,6 @@ class Build : NukeBuild
                 .SetProjectFile(Solution));
         });
 
-    Target PrintVersion => _ => _
-        .Executes(() =>
-        {
-            Log.Information(GitVersion.FullSemVer);
-            Log.Information(GitVersion.NuGetVersionV2);
-        });
-
     Target Compile => _ => _
         .DependsOn(Restore)
         .Executes(() =>
@@ -85,9 +76,6 @@ class Build : NukeBuild
             DotNetBuild(_ => _
                 .SetProjectFile(Solution)
                 .SetConfiguration(Configuration)
-                .SetAssemblyVersion(GitVersion.AssemblySemVer)
-                .SetFileVersion(GitVersion.AssemblySemFileVer)
-                .SetInformationalVersion(GitVersion.InformationalVersion)
                 .EnableNoRestore());
         });
 
@@ -112,7 +100,6 @@ class Build : NukeBuild
             DotNetPack(s => s
                 .SetProject(Solution.QuickProxyNet)
                 .SetConfiguration(Configuration)
-                .SetVersion(GitVersion.NuGetVersionV2)
                 .SetNoDependencies(true)
                 .SetContinuousIntegrationBuild(true)
                 .SetOutputDirectory(ArtifactsDirectory / "nuget"));

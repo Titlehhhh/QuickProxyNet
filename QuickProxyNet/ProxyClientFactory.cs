@@ -11,7 +11,7 @@ public sealed class ProxyClientFactory
     /// <summary>
     /// Gets a singleton instance of the ProxyClientFactory.
     /// </summary>
-    public static ProxyClientFactory Instance => new();
+    public static ProxyClientFactory Instance { get; } = new();
 
     /// <summary>
     /// Creates an IProxyClient instance based on the provided URI, automatically determining the proxy type
@@ -35,8 +35,12 @@ public sealed class ProxyClientFactory
 
         if (!string.IsNullOrEmpty(proxyUri.UserInfo))
         {
-            var userAndPass = proxyUri.UserInfo.Split(':');
-            credential = new NetworkCredential(userAndPass[0], userAndPass[1]);
+            var sep = proxyUri.UserInfo.IndexOf(':');
+            credential = sep < 0
+                ? new NetworkCredential(proxyUri.UserInfo, string.Empty)
+                : new NetworkCredential(
+                    proxyUri.UserInfo.Substring(0, sep),
+                    proxyUri.UserInfo.Substring(sep + 1));
         }
 
         return Create(type, proxyUri.Host, proxyUri.Port, credential);

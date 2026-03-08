@@ -1,29 +1,50 @@
 # QuickProxyNet
 
-QuickProxyNet is a high-performance .NET library for connecting to servers via various types of proxies (HTTP, HTTPS, SOCKS4, SOCKS4a, SOCKS5). It offers raw Stream access for direct data handling, making it ideal for applications needing low-level network control.
+High-performance, zero-dependency C# library for connecting through HTTP, HTTPS, SOCKS4, SOCKS4a, and SOCKS5 proxies. Returns a raw `Stream` for direct data access.
 
-## Features
-- Supports HTTP, HTTPS, SOCKS4, SOCKS4a, SOCKS5 proxies
-- High-performance and minimal latency
-- Raw Stream Access for low-level data operations
-- Customizable timeout and connection settings
+**Targets:** .NET 8 / .NET 9 / .NET 10
 
-## Usage Example
+## Quick Start
 
 ```csharp
-using QuickProxyNet;
-using System;
-using System.Net;
+// One-liner — ideal for mass proxy checking
+await using var stream = await Proxy.ConnectAsync(
+    new Uri("socks5://user:pass@127.0.0.1:1080"),
+    "example.com", 443,
+    TimeSpan.FromSeconds(5));
+```
 
-// Define the proxy URI with optional credentials
-Uri proxyUri = new Uri("http://username:password@proxyserver.com:8080");
+Or via extension method:
 
-// Create a proxy client
-var proxyClient = ProxyClientFactory.Instance.Create(proxyUri);
+```csharp
+await using var stream = await new Uri("http://proxy:8080")
+    .ConnectThroughProxyAsync("example.com", 443);
+```
 
-// Connect through the proxy and get a raw Stream for direct data access
-using (var connectionStream = await proxyClient.ConnectAsync("destinationserver.com", 80))
+## Features
+
+- Zero runtime dependencies (BCL only)
+- Zero-alloc protocol logic (`ArrayPool`, `stackalloc`, `Utf8Formatter`, `ValueTask`)
+- Structured errors: `ProxyProtocolException` with `ProxyErrorCode` enum
+- Per-connection timeouts with `ProxyErrorCode.Timeout`
+- Static API (`Proxy.ConnectAsync`) and factory API (`ProxyClientFactory`)
+
+## Error Handling
+
+```csharp
+try
 {
-// Work directly with the Stream
+    await using var stream = await Proxy.ConnectAsync(proxyUri, host, port,
+        TimeSpan.FromSeconds(5));
+}
+catch (ProxyProtocolException ex) when (ex.ErrorCode == ProxyErrorCode.Timeout)
+{
+    // Timed out — ex.Message includes proxy and target host:port
+}
+catch (ProxyProtocolException ex) when (ex.ErrorCode == ProxyErrorCode.AuthFailed)
+{
+    // Wrong credentials
 }
 ```
+
+See [full documentation](https://github.com/Titlehhhh/QuickProxyNet) for all error codes and configuration options.

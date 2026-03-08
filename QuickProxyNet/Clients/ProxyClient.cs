@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 
@@ -15,20 +15,18 @@ public abstract class ProxyClient : IProxyClient
 
         if (!string.IsNullOrWhiteSpace(uri.UserInfo))
         {
-            var credentials = uri.UserInfo.Split(':');
-            if (credentials.Length != 2)
-            {
+            var sep = uri.UserInfo.IndexOf(':');
+            if (sep < 0)
                 throw new ArgumentException("Invalid credentials format.", nameof(uri.UserInfo));
-            }
 
-            ProxyCredentials = new NetworkCredential(credentials[0], credentials[1]);
+            ProxyCredentials = new NetworkCredential(
+                uri.UserInfo.Substring(0, sep),
+                uri.UserInfo.Substring(sep + 1));
         }
     }
 
     protected ProxyClient(string protocol, string host, int port)
     {
-        ProxyUri = new Uri($"{protocol}://{host}:{port}");
-
         if (host == null)
             throw new ArgumentNullException(nameof(host));
 
@@ -41,6 +39,7 @@ public abstract class ProxyClient : IProxyClient
 
         ProxyHost = host;
         ProxyPort = port == 0 ? 1080 : port;
+        ProxyUri = new Uri($"{protocol}://{host}:{port}");
     }
 
     protected ProxyClient(string protocol, string host, int port, NetworkCredential credentials)
@@ -81,25 +80,17 @@ public abstract class ProxyClient : IProxyClient
 
     public int WriteTimeout { get; set; }
     public int ReadTimeout { get; set; }
-    
-    private static void OnDisposeSocket(object? state)
-    {
-        if (state is Socket socket)
-        {
-            socket.Dispose();
-        }
-    }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Socket CreateSocket()
     {
         var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
         {
             NoDelay = this.NoDelay,
-            LingerState = this.LingerState,
             SendTimeout = this.WriteTimeout,
             ReceiveTimeout = this.ReadTimeout
         };
+        if (LingerState is not null)
+            socket.LingerState = LingerState;
         if (LocalEndPoint is not null)
             socket.Bind(LocalEndPoint);
         return socket;
@@ -113,15 +104,15 @@ public abstract class ProxyClient : IProxyClient
 
         var socket = CreateSocket();
 
-        await using var reg = cancellationToken.Register(OnDisposeSocket, socket);
         try
         {
             await socket.ConnectAsync(ProxyHost, ProxyPort, cancellationToken);
         }
-        catch
+        catch (Exception ex)
         {
             socket.Dispose();
-            throw;
+            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
+                $"Failed to connect to proxy {ProxyHost}:{ProxyPort} for target {host}:{port}.", ex);
         }
 
         var stream = new NetworkStream(socket, true);
@@ -136,9 +127,6 @@ public abstract class ProxyClient : IProxyClient
         }
     }
 
-    
-
-
     public virtual async ValueTask<Stream> ConnectAsync(string host, int port, TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
@@ -147,20 +135,29 @@ public abstract class ProxyClient : IProxyClient
         cancellationToken.ThrowIfCancellationRequested();
 
         var socket = CreateSocket();
-        await using var reg = cancellationToken.Register(s => ((IDisposable)s).Dispose(), socket);
-        
-        await using ITimer timer =
-            TimeProvider.System.CreateTimer(OnDisposeSocket, socket, timeout, Timeout.InfiniteTimeSpan);
+        var timedOut = new StrongBox<bool>(false);
 
+        await using ITimer timer = TimeProvider.System.CreateTimer(
+            static s =>
+            {
+                var state = (Tuple<Socket, StrongBox<bool>>)s!;
+                Volatile.Write(ref state.Item2.Value, true);
+                state.Item1.Dispose();
+            },
+            Tuple.Create(socket, timedOut), timeout, Timeout.InfiniteTimeSpan);
 
         try
         {
             await socket.ConnectAsync(ProxyHost, ProxyPort, cancellationToken);
         }
-        catch
+        catch (Exception ex)
         {
             socket.Dispose();
-            throw;
+            if (Volatile.Read(ref timedOut.Value))
+                throw new ProxyProtocolException(ProxyErrorCode.Timeout,
+                    $"Connection to proxy {ProxyHost}:{ProxyPort} timed out after {timeout}.", ex);
+            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
+                $"Failed to connect to proxy {ProxyHost}:{ProxyPort} for target {host}:{port}.", ex);
         }
 
         var stream = new NetworkStream(socket, true);
@@ -168,9 +165,12 @@ public abstract class ProxyClient : IProxyClient
         {
             return await ConnectAsync(stream, host, port, cancellationToken);
         }
-        catch
+        catch (Exception ex)
         {
             await stream.DisposeAsync();
+            if (Volatile.Read(ref timedOut.Value))
+                throw new ProxyProtocolException(ProxyErrorCode.Timeout,
+                    $"Connection to proxy {ProxyHost}:{ProxyPort} timed out after {timeout}.", ex);
             throw;
         }
     }
