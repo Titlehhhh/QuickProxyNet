@@ -22,6 +22,15 @@ public sealed class ProxyClientFactory
     /// <exception cref="NotSupportedException">Thrown if the URI scheme is not supported.</exception>
     public IProxyClient Create(Uri proxyUri)
     {
+        // VLESS carries its whole configuration (uuid, security, sni, …) in the URI,
+        // so it is parsed as a share link rather than the generic host/port/credential path.
+        if (proxyUri.Scheme.Equals("vless", StringComparison.OrdinalIgnoreCase))
+            return new VlessClient(VlessShareLink.Parse(proxyUri.OriginalString));
+
+        // Trojan likewise carries its whole configuration (password, sni, alpn, …) in the URI.
+        if (proxyUri.Scheme.Equals("trojan", StringComparison.OrdinalIgnoreCase))
+            return new TrojanClient(TrojanShareLink.Parse(proxyUri.OriginalString));
+
         NetworkCredential? credential = null;
         ProxyType type = proxyUri.Scheme switch
         {

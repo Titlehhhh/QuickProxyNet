@@ -39,7 +39,7 @@ public abstract class ProxyClient : IProxyClient
 
         ProxyHost = host;
         ProxyPort = port == 0 ? 1080 : port;
-        ProxyUri = new Uri($"{protocol}://{host}:{port}");
+        ProxyUri = new Uri($"{protocol}://{FormatUriHost(host)}:{port}");
     }
 
     protected ProxyClient(string protocol, string host, int port, NetworkCredential credentials)
@@ -60,9 +60,15 @@ public abstract class ProxyClient : IProxyClient
         ProxyHost = host;
         ProxyPort = port == 0 ? 1080 : port;
 
-        ProxyUri = new Uri($"{protocol}://{credentials.UserName}:{credentials.Password}@{host}:{port}");
+        ProxyUri = new Uri($"{protocol}://{credentials.UserName}:{credentials.Password}@{FormatUriHost(host)}:{port}");
         ProxyCredentials = credentials;
     }
+
+    // An IPv6 literal must be bracketed in a URI ("[2001:db8::1]"), otherwise the Uri
+    // parser reads the address's colons as a port separator and throws. Host names and
+    // IPv4 literals never contain ':', so this only affects IPv6 endpoints.
+    private static string FormatUriHost(string host) =>
+        host.Contains(':') ? $"[{host}]" : host;
 
     public Uri ProxyUri { get; private set; }
     public abstract ProxyType Type { get; }

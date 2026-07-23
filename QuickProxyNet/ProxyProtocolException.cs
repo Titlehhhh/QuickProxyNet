@@ -52,5 +52,7 @@ public enum ProxyErrorCode
     /// <summary>Failed to resolve host to an IPv4 address (required for SOCKS4).</summary>
     SocksNoIPv4Address,
     /// <summary>The proxy connection timed out.</summary>
-    Timeout
+    Timeout,
+    /// <summary>A protocol string field (e.g. a target host name) exceeded the 255-byte limit.</summary>
+    StringTooLong
 }
