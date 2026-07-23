@@ -20,6 +20,15 @@ public sealed class ProxyClientFactory
     /// <param name="proxyUri">The URI of the proxy server, including scheme, host, port, and optional credentials.</param>
     /// <returns>An instance of IProxyClient configured for the specified proxy.</returns>
     /// <exception cref="NotSupportedException">Thrown if the URI scheme is not supported.</exception>
+    /// <remarks>
+    /// <b>Note for <c>vmess://</c>:</b> a VMess share link is base64-encoded JSON rather
+    /// than a host/port URI, and <see cref="Uri"/> rejects a payload that is longer than
+    /// its host-length limit or that contains base64 padding — which covers most
+    /// real-world links. Such a link cannot be turned into a <see cref="Uri"/> at all, so
+    /// prefer <see cref="VmessClient.FromShareLink(string)"/> (or
+    /// <see cref="VmessShareLink.Parse(string)"/>) to parse the string directly. The
+    /// special case below exists for the short links that <em>are</em> representable.
+    /// </remarks>
     public IProxyClient Create(Uri proxyUri)
     {
         // VLESS carries its whole configuration (uuid, security, sni, …) in the URI,
@@ -30,6 +39,10 @@ public sealed class ProxyClientFactory
         // Trojan likewise carries its whole configuration (password, sni, alpn, …) in the URI.
         if (proxyUri.Scheme.Equals("trojan", StringComparison.OrdinalIgnoreCase))
             return new TrojanClient(TrojanShareLink.Parse(proxyUri.OriginalString));
+
+        // VMess carries its whole configuration as base64-encoded JSON in the URI body.
+        if (proxyUri.Scheme.Equals("vmess", StringComparison.OrdinalIgnoreCase))
+            return new VmessClient(VmessShareLink.Parse(proxyUri.OriginalString));
 
         NetworkCredential? credential = null;
         ProxyType type = proxyUri.Scheme switch

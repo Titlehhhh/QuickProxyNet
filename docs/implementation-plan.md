@@ -169,6 +169,27 @@ BenchmarkDotNet 0.15.8, .NET 10, Xeon E5-2697 v4, ShortRun/InProcessNoEmit
 **Фаза 3 — VMess AEAD:** KDF/auth, body framing, `VmessStream` wrapper,
 time-sync, `security` (`aes-128-gcm`/`chacha20-poly1305`), `alterId=0`.
 
+Зафиксированные API-решения фазы 3 (утверждены 2026-07-23):
+
+1. **Share-link / JSON.** `VmessShareLink.Parse` разбирает классический
+   `vmess://base64(JSON)`. Декодируем base64 → парсим `System.Text.Json`
+   `Utf8JsonReader` (в составе фреймворка на net8/9/10, без внешних
+   зависимостей; zero-alloc-ридер по UTF-8). URI-style vmess-ссылки и не-base64
+   вход → `FormatException` с явным сообщением (расширим позже).
+2. **Body security (`scy`).** Поддерживаем `aes-128-gcm`, `chacha20-poly1305`
+   и `auto` (→ `aes-128-gcm` при аппаратном AES, иначе `chacha20-poly1305`,
+   как v2ray). `none`/`zero`/`aes-128-cfb`/legacy → `NotSupportedException`.
+3. **Детерминизм тестов.** Заголовок VMess вшивает UTC-время + random, поэтому
+   вводим **internal seam** для времени (`TimeProvider`, как в базовом
+   `ProxyClient`) и для random/nonce. Helper даёт детерминированные wire-байты
+   в юнит-тестах и сверяется с независимым эталоном. Публичное API seam не
+   расширяет — только internal.
+4. **Транспорт/TLS/legacy.** Поддерживаем `net=tcp` c `security` none/tls
+   (`SslStream` снаружи + `VmessStream` внутри — паттерн `VlessClient`),
+   `alterId=0` (VMessAEAD). `ws`/`grpc`/`h2`/`httpupgrade`/`reality`,
+   `alterId>0` (legacy MD5 auth), UDP/Mux → `NotSupportedException` с явным
+   сообщением (честный gating до записи байтов).
+
 **Фаза 4 — QUIC (Hysteria2/TUIC):** отдельный пакет `QuickProxyNet.Quic` на
 `System.Net.Quic`, lifecycle одного QUIC-соединения на несколько стримов.
 
