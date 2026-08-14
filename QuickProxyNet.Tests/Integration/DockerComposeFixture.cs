@@ -24,13 +24,27 @@ namespace QuickProxyNet.Tests.Integration;
 /// in xUnit as an opaque collection-level error; storing the reason lets every test fail with
 /// the actual docker output.
 /// </para>
+/// <para>
+/// The stack is a <b>machine-global singleton</b>: one fixed project name, one fixed set of host
+/// ports. Two test processes therefore cannot own it at once — and <c>dotnet test</c> on a
+/// multi-targeted project runs the TFMs concurrently, so that is the normal case, not an exotic
+/// one. <see cref="AcquireGlobalLockAsync"/> serializes them; each run brings the stack up, uses
+/// it, and tears it down before the next acquires the lock.
+/// </para>
 /// </remarks>
 public sealed class DockerComposeFixture : IAsyncLifetime
 {
     /// <summary>The fixed compose project name. Never generate this.</summary>
     public const string ProjectName = "quickproxynet-test";
 
+    /// <summary>
+    /// How long to wait for another test process to finish with the stack. Generous on purpose:
+    /// the holder keeps the lock for its whole docker run, not just for startup.
+    /// </summary>
+    private static readonly TimeSpan LockTimeout = TimeSpan.FromMinutes(10);
+
     private bool _composeTouched;
+    private FileStream? _globalLock;
 
     /// <summary>Absolute path of <c>tests/docker/docker-compose.yml</c>.</summary>
     public string ComposeFile { get; private set; } = "";
@@ -57,6 +71,10 @@ public sealed class DockerComposeFixture : IAsyncLifetime
         {
             ComposeFile = LocateComposeFile();
 
+            // Must be held before touching compose: the 'down -v' below would otherwise rip the
+            // stack out from under a concurrently running test process.
+            _globalLock = await AcquireGlobalLockAsync(LockTimeout);
+
             // Clear anything a previously interrupted run left behind before starting.
             _composeTouched = true;
             await ComposeAsync("down -v --remove-orphans", TimeSpan.FromMinutes(2));
@@ -78,16 +96,50 @@ public sealed class DockerComposeFixture : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        if (!_composeTouched)
-            return;
-
         try
         {
-            await ComposeAsync("down -v --remove-orphans", TimeSpan.FromMinutes(2));
+            if (_composeTouched)
+                await ComposeAsync("down -v --remove-orphans", TimeSpan.FromMinutes(2));
         }
         finally
         {
             _composeTouched = false;
+
+            // Released last, so the next test process only sees a torn-down stack.
+            _globalLock?.Dispose();
+            _globalLock = null;
+        }
+    }
+
+    /// <summary>
+    /// Takes an exclusive cross-process lock on the compose stack, waiting for whoever holds it.
+    /// </summary>
+    /// <remarks>
+    /// A lock <i>file</i> rather than a named <see cref="Mutex"/> on purpose: a mutex has thread
+    /// affinity and must be released by the thread that took it, which async test lifecycle
+    /// methods do not guarantee — the release would throw. A <see cref="FileStream"/> opened with
+    /// <see cref="FileShare.None"/> has no such affinity and is released by disposal.
+    /// </remarks>
+    private static async Task<FileStream> AcquireGlobalLockAsync(TimeSpan timeout)
+    {
+        string path = Path.Combine(Path.GetTempPath(), "quickproxynet-docker-compose.lock");
+        long deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+
+        while (true)
+        {
+            try
+            {
+                return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException)
+            {
+                if (Environment.TickCount64 > deadline)
+                    throw new TimeoutException(
+                        $"Another test process has held the docker compose stack for over {timeout}. " +
+                        $"If none is running, delete '{path}'.");
+
+                await Task.Delay(250);
+            }
         }
     }
 

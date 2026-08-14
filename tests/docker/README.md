@@ -30,6 +30,13 @@ docker compose -p quickproxynet-test -f tests/docker/docker-compose.yml down -v
 If a run is interrupted, the `down -v` above is the cleanup. After a completed run `docker ps`
 must be empty.
 
+The stack is a **machine-global singleton** — one fixed project name, one fixed set of host
+ports — so only one test process can own it at a time. Since the test project multi-targets,
+`dotnet test` runs the TFMs concurrently, and `DockerComposeFixture` serializes them on a lock
+file (`%TEMP%/quickproxynet-docker-compose.lock`): each run brings the stack up, uses it and
+tears it down before the next starts. If a process is killed hard and a later run reports the
+lock as held for over ten minutes, delete that file.
+
 ## Images
 
 All three are expected to be present locally; nothing here builds an image.

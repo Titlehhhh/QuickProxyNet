@@ -9,7 +9,7 @@ HTTPS, SOCKS4, SOCKS4a, SOCKS5) and the VPN-style family (VLESS, Trojan, VMess).
 - NuGet package: `QuickProxyNet`
 - Author: Titlehhhh
 - License: MIT
-- Core targets: `net8.0`, `net9.0`, `net10.0`
+- Core targets: `net8.0`, `net9.0`, `net10.0`, `net11.0`
 
 ## Repository Layout
 
@@ -219,7 +219,12 @@ not "clean up" any of them without reading the reasoning first.
 - Public API additions must have XML documentation.
 - Add new proxy types through `ProxyType`, client implementation, factory
   registration, protocol helper, error codes, and tests.
-- Preserve multi-target compatibility for `net8.0`, `net9.0`, and `net10.0`.
+- Preserve multi-target compatibility for `net8.0`, `net9.0`, `net10.0` and
+  `net11.0`. `net11.0` is still a preview SDK, so building the repo needs a
+  preview .NET install; that is what emits `NETSDK1057` on every build.
+- The test project multi-targets `net10.0;net11.0` so the newest target is
+  actually exercised. A TFM nothing runs against is a claim of support, not
+  support.
 - **Never silently downgrade.** An unrecognized `security=`, a non-zero
   `alterId`, or a transport we cannot speak must fail with a message naming what
   was found and what is accepted. Defaulting an unknown TLS mode to plaintext
