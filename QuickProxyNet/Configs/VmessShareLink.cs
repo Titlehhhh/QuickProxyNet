@@ -10,9 +10,26 @@ namespace QuickProxyNet;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Grammar: <c>vmess://</c> followed by base64-encoded UTF-8 JSON (the "v2rayN" format).
-/// Both the standard and the URL-safe base64 alphabets are accepted, with or without
-/// padding, and embedded whitespace is ignored — real-world links violate all three rules.
+/// Two grammars exist in the wild and both are accepted:
+/// </para>
+/// <list type="number">
+/// <item><description>
+/// <b>v2rayN base64-JSON</b> — <c>vmess://</c> followed by base64-encoded UTF-8 JSON.
+/// Both the standard and the URL-safe alphabets are accepted, with or without padding,
+/// embedded whitespace is ignored, and a <c>#remark</c> fragment appended <em>after</em>
+/// the base64 is treated as the remark rather than as payload. Real-world links violate
+/// all four rules.
+/// </description></item>
+/// <item><description>
+/// <b>Standard URI</b> — <c>vmess://{uuid}@{host}:{port}?{query}#{remark}</c>. Note that
+/// the query keys carry different meanings from the JSON fields: <c>type</c> is the
+/// transport, <c>headerType</c> the obfuscation, <c>encryption</c> the body cipher and
+/// <c>security</c> the transport security.
+/// </description></item>
+/// </list>
+/// <para>
+/// A payload containing <c>@</c> selects the second grammar; that character occurs in
+/// neither base64 alphabet, so the choice is unambiguous.
 /// </para>
 /// <para>
 /// Recognized JSON fields: <c>add</c>, <c>port</c>, <c>id</c>, <c>aid</c>/<c>alterId</c>,
@@ -77,6 +94,30 @@ public static class VmessShareLink
         ReadOnlySpan<char> payload = link[Scheme.Length..];
         if (payload.IsEmpty)
         {
+            error = "VMess share link has no payload.";
+            return false;
+        }
+
+        // Two grammars exist in the wild. Neither base64 alphabet contains '@', so its
+        // presence unambiguously means the standard URI form.
+        if (payload.IndexOf('@') >= 0)
+            return TryParseStandardUri(link.ToString(), out options, out error);
+
+        // v2rayN base64-JSON. Producers routinely append the remark as a '#fragment'
+        // *after* the base64, which then fails to decode. '#' is not in either alphabet
+        // either, so everything from it onwards is the remark, not payload.
+        string? fragmentRemark = null;
+        int hash = payload.IndexOf('#');
+        if (hash >= 0)
+        {
+            ReadOnlySpan<char> fragment = payload[(hash + 1)..];
+            if (!fragment.IsEmpty)
+                fragmentRemark = Uri.UnescapeDataString(fragment.ToString());
+            payload = payload[..hash];
+        }
+
+        if (payload.IsEmpty)
+        {
             error = "VMess share link has no base64 payload.";
             return false;
         }
@@ -94,13 +135,252 @@ public static class VmessShareLink
                 return false;
             }
 
-            return TryParseJson(json.AsMemory(0, jsonLength), out options, out error);
+            return TryParseJson(json.AsMemory(0, jsonLength), fragmentRemark, out options, out error);
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(json, clearArray: true);
         }
     }
+
+    /// <summary>
+    /// Parses the standard URI grammar
+    /// <c>vmess://{uuid}@{host}:{port}?{query}#{remark}</c>.
+    /// </summary>
+    /// <remarks>
+    /// The query keys do <b>not</b> mean the same thing as the JSON fields: here
+    /// <c>type</c> is the <em>transport</em> (what JSON calls <c>net</c>),
+    /// <c>headerType</c> is the header obfuscation (what JSON calls <c>type</c>),
+    /// <c>encryption</c> is the VMess body cipher (what JSON calls <c>scy</c>), and
+    /// <c>security</c> is the transport security (what JSON calls <c>tls</c>). Getting
+    /// this mapping backwards silently produces a client that negotiates the wrong cipher.
+    /// </remarks>
+    private static bool TryParseStandardUri(
+        string shareLink,
+        [NotNullWhen(true)] out VmessOptions? options,
+        [NotNullWhen(false)] out string? error)
+    {
+        options = null;
+
+        if (!Uri.TryCreate(shareLink, UriKind.Absolute, out var uri))
+        {
+            error =
+                "VMess share link is not a well-formed URI. Expected either base64-encoded " +
+                "JSON or 'vmess://{id}@{host}:{port}?{query}#{remark}'.";
+            return false;
+        }
+
+        string id = Uri.UnescapeDataString(uri.UserInfo);
+        if (id.Length == 0)
+        {
+            error = "VMess share link is missing the user id.";
+            return false;
+        }
+
+        Span<byte> probe = stackalloc byte[UuidCodec.Size];
+        if (!UuidCodec.TryWriteBigEndian(id, probe))
+        {
+            error =
+                $"VMess user id '{id}' is unusable: it is neither a canonical UUID nor a " +
+                "string of 1..30 characters (which would be mapped to a UUID).";
+            return false;
+        }
+
+        // Uri.Host keeps the brackets on an IPv6 literal, which would then fail to resolve.
+        string host = uri.Host;
+        if (host.Length > 1 && host[0] == '[' && host[^1] == ']')
+            host = host.Substring(1, host.Length - 2);
+        if (host.Length == 0)
+        {
+            error = "VMess share link is missing the server address.";
+            return false;
+        }
+
+        int port = uri.Port;
+        if (port <= 0 || port > 65535)
+        {
+            error = "VMess share link is missing a valid server port.";
+            return false;
+        }
+
+        string? encryption = null, transportSecurity = null, headerType = null;
+        string transport = "tcp";
+        string? sni = null, transportHost = null, path = null;
+        string[]? alpn = null;
+        bool allowInsecure = false;
+
+        ReadOnlySpan<char> query = uri.Query;
+        if (query.Length > 1)
+        {
+            query = query[1..];
+            while (!query.IsEmpty)
+            {
+                int amp = query.IndexOf('&');
+                ReadOnlySpan<char> pair = amp < 0 ? query : query[..amp];
+                query = amp < 0 ? default : query[(amp + 1)..];
+
+                int eq = pair.IndexOf('=');
+                if (eq < 0)
+                    continue;
+
+                ReadOnlySpan<char> key = ShareLinkQuery.StripHtmlAmpPrefix(pair[..eq]);
+                ReadOnlySpan<char> rawVal = pair[(eq + 1)..];
+                if (rawVal.IsEmpty)
+                    continue;
+
+                if (key.Equals("type", StringComparison.OrdinalIgnoreCase) ||
+                    key.Equals("network", StringComparison.OrdinalIgnoreCase))
+                    transport = Decode(rawVal);
+                else if (key.Equals("encryption", StringComparison.OrdinalIgnoreCase))
+                    encryption = Decode(rawVal);
+                else if (key.Equals("security", StringComparison.OrdinalIgnoreCase))
+                    transportSecurity = Decode(rawVal);
+                else if (key.Equals("headerType", StringComparison.OrdinalIgnoreCase))
+                    headerType = Decode(rawVal);
+                else if (key.Equals("sni", StringComparison.OrdinalIgnoreCase) ||
+                         key.Equals("serverName", StringComparison.OrdinalIgnoreCase) ||
+                         key.Equals("peer", StringComparison.OrdinalIgnoreCase))
+                    sni = Decode(rawVal);
+                else if (key.Equals("host", StringComparison.OrdinalIgnoreCase))
+                    transportHost = Decode(rawVal);
+                else if (key.Equals("path", StringComparison.OrdinalIgnoreCase))
+                    path = Decode(rawVal);
+                else if (key.Equals("alpn", StringComparison.OrdinalIgnoreCase))
+                    alpn = SplitAlpn(Decode(rawVal));
+                else if (key.Equals("allowInsecure", StringComparison.OrdinalIgnoreCase) ||
+                         key.Equals("insecure", StringComparison.OrdinalIgnoreCase) ||
+                         key.Equals("skip-cert-verify", StringComparison.OrdinalIgnoreCase))
+                    allowInsecure = IsTruthy(Decode(rawVal));
+            }
+        }
+
+        // 'security' means two different things in the wild, and which one is meant can be
+        // recovered from the value instead of guessed. The URI grammar defines it as the
+        // transport security (what the JSON form calls 'tls'), and links pairing it with a
+        // VLESS-style 'encryption=none' do use it that way. But 611 links — 27% of every
+        // vmess link in a 17k real-world corpus — put the *body cipher* there instead, which
+        // the JSON form calls 'scy'. The two value sets are disjoint apart from 'none':
+        //
+        //   auto | aes-128-gcm | chacha20-poly1305   -> body cipher
+        //   tls  | reality     | none                -> transport security
+        //
+        // 'none' stays transport security. That is its documented meaning, and both readings
+        // agree the connection is not TLS, so nothing is downgraded by keeping it.
+        //
+        // Reading 'security=auto' as "no TLS" cannot leak a credential the way the VLESS
+        // downgrade did: VMessAEAD seals the request header under a key derived from the id,
+        // so the id never reaches the wire in cleartext. A wrong guess costs a failed
+        // handshake — the server cannot parse a plaintext header and drops the connection.
+        if (LooksLikeBodyCipher(transportSecurity))
+        {
+            encryption ??= transportSecurity;
+            transportSecurity = null;
+        }
+
+        // VMess has no 'encryption' key of its own; producers copy it from the VLESS grammar,
+        // where 'encryption=none' is mandatory boilerplate. Treat it as unspecified rather
+        // than as a request for VMess's unencrypted body mode, which no real server runs.
+        if (encryption is not null && encryption.Equals("none", StringComparison.OrdinalIgnoreCase))
+            encryption = null;
+
+        if (!TryParseSecurity(encryption, out VmessSecurityKind security))
+        {
+            error = UnsupportedSecurityMessage(encryption);
+            return false;
+        }
+
+        if (!TryValidateHeaderType(headerType, transport, out error))
+            return false;
+
+        bool useTls = false;
+        if (!string.IsNullOrEmpty(transportSecurity) &&
+            !transportSecurity.Equals("none", StringComparison.OrdinalIgnoreCase))
+        {
+            if (transportSecurity.Equals("reality", StringComparison.OrdinalIgnoreCase))
+            {
+                error = "VMess over REALITY is not supported: it requires a uTLS ClientHello fingerprint.";
+                return false;
+            }
+
+            if (!transportSecurity.Equals("tls", StringComparison.OrdinalIgnoreCase))
+            {
+                // Never default an unknown value to plaintext — that would send the sealed
+                // request header to a server expecting TLS.
+                error =
+                    $"Unrecognized VMess transport security '{transportSecurity}': expected " +
+                    "'none' or 'tls'.";
+                return false;
+            }
+
+            useTls = true;
+        }
+
+        if (string.IsNullOrEmpty(sni))
+            sni = transportHost;
+        if (string.IsNullOrEmpty(sni))
+            sni = host;
+
+        options = new VmessOptions
+        {
+            Id = id,
+            Host = host,
+            Port = port,
+            Security = security,
+            AlterId = 0,
+            Transport = transport,
+            UseTls = useTls,
+            Sni = sni,
+            Alpn = alpn,
+            Path = path,
+            HostHeader = transportHost,
+            AllowInsecure = allowInsecure,
+            Remark = uri.Fragment.Length > 1
+                ? Uri.UnescapeDataString(uri.Fragment[1..])
+                : null
+        };
+        error = null;
+        return true;
+    }
+
+    /// <summary>
+    /// Validates the header-obfuscation field, which is only meaningful on the raw TCP
+    /// transport. Every real client ignores it on <c>ws</c>, <c>httpupgrade</c> and
+    /// <c>grpc</c>, where producers routinely leave junk in it, so rejecting it there would
+    /// reject otherwise-valid links.
+    /// </summary>
+    private static bool TryValidateHeaderType(
+        string? headerType, string transport, [NotNullWhen(false)] out string? error)
+    {
+        error = null;
+
+        if (string.IsNullOrEmpty(headerType) ||
+            headerType.Equals("none", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // "raw" is Xray's current name for the plain TCP transport.
+        bool isTcp = transport.Equals("tcp", StringComparison.OrdinalIgnoreCase) ||
+                     transport.Equals("raw", StringComparison.OrdinalIgnoreCase);
+        if (!isTcp)
+            return true;
+
+        error =
+            $"VMess header obfuscation type '{headerType}' is not supported on the " +
+            $"'{transport}' transport; only 'none' is.";
+        return false;
+    }
+
+    private static string UnsupportedSecurityMessage(string? value) =>
+        $"Unrecognized VMess security '{value}': only 'auto', 'aes-128-gcm' and " +
+        "'chacha20-poly1305' are supported.";
+
+    private static string[]? SplitAlpn(string value)
+    {
+        string[] parts = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length == 0 ? null : parts;
+    }
+
+    private static string Decode(ReadOnlySpan<char> value)
+        => value.IndexOf('%') < 0 ? value.ToString() : Uri.UnescapeDataString(value.ToString());
 
     /// <summary>
     /// Decodes a payload that uses the URL-safe alphabet and/or omits its padding.
@@ -165,6 +445,7 @@ public static class VmessShareLink
 
     private static bool TryParseJson(
         ReadOnlyMemory<byte> utf8Json,
+        string? fragmentRemark,
         [NotNullWhen(true)] out VmessOptions? options,
         [NotNullWhen(false)] out string? error)
     {
@@ -199,7 +480,7 @@ public static class VmessShareLink
             JsonElement aidField = default, alterIdField = default;
             JsonElement scyField = default, securityField = default;
             JsonElement netField = default, typeField = default, tlsField = default;
-            JsonElement sniField = default, hostField = default;
+            JsonElement sniField = default, hostField = default, pathField = default;
             JsonElement alpnField = default, psField = default;
             JsonElement allowInsecureField = default, skipCertVerifyField = default;
 
@@ -217,6 +498,7 @@ public static class VmessShareLink
                 else if (property.NameEquals("tls"u8)) tlsField = property.Value;
                 else if (property.NameEquals("sni"u8)) sniField = property.Value;
                 else if (property.NameEquals("host"u8)) hostField = property.Value;
+                else if (property.NameEquals("path"u8)) pathField = property.Value;
                 else if (property.NameEquals("alpn"u8)) alpnField = property.Value;
                 else if (property.NameEquals("ps"u8)) psField = property.Value;
                 else if (property.NameEquals("allowInsecure"u8)) allowInsecureField = property.Value;
@@ -234,7 +516,9 @@ public static class VmessShareLink
             Span<byte> probe = stackalloc byte[UuidCodec.Size];
             if (!UuidCodec.TryWriteBigEndian(id, probe))
             {
-                error = $"VMess user id '{id}' is not a valid UUID.";
+                error =
+                    $"VMess user id '{id}' is unusable: it is neither a canonical UUID nor a " +
+                    "string of 1..30 characters (which would be mapped to a UUID).";
                 return false;
             }
 
@@ -287,25 +571,18 @@ public static class VmessShareLink
             string? scy = GetString(scyField) ?? GetString(securityField);
             if (!TryParseSecurity(scy, out VmessSecurityKind security))
             {
-                error =
-                    $"Unrecognized VMess security '{scy}': only 'auto', 'aes-128-gcm' and " +
-                    "'chacha20-poly1305' are supported.";
+                error = UnsupportedSecurityMessage(scy);
                 return false;
             }
 
             // ---- net / type ----
+            // 'net' is the transport; 'type' is header obfuscation (e.g. "http"), which
+            // only applies to the raw TCP transport.
             string? net = GetString(netField);
             string transport = string.IsNullOrEmpty(net) ? "tcp" : net;
 
-            string? headerType = GetString(typeField);
-            if (!string.IsNullOrEmpty(headerType) &&
-                !headerType.Equals("none", StringComparison.OrdinalIgnoreCase))
-            {
-                // 'type' is header obfuscation (e.g. "http"), not the transport. Anything
-                // other than "none" wraps the VMess stream in a framing we do not produce.
-                error = $"VMess header obfuscation type '{headerType}' is not supported; only 'none' is.";
+            if (!TryValidateHeaderType(GetString(typeField), transport, out error))
                 return false;
-            }
 
             // ---- tls ----
             string? tls = GetString(tlsField);
@@ -341,13 +618,28 @@ public static class VmessShareLink
                 UseTls = useTls,
                 Sni = sni,
                 Alpn = GetAlpn(alpnField),
+                Path = GetString(pathField),
+                HostHeader = GetString(hostField),
                 AllowInsecure = GetBoolean(allowInsecureField) || GetBoolean(skipCertVerifyField),
-                Remark = GetString(psField)
+                // 'ps' is authoritative; the '#fragment' form is the fallback for producers
+                // that append the remark after the base64 instead of putting it in the JSON.
+                Remark = GetString(psField) ?? fragmentRemark
             };
             error = null;
             return true;
         }
     }
+
+    /// <summary>
+    /// True when a value found in the URI's <c>security</c> key is unambiguously a body
+    /// cipher rather than a transport security mode. <c>none</c> is excluded on purpose: it
+    /// is valid in both vocabularies.
+    /// </summary>
+    private static bool LooksLikeBodyCipher(string? value) =>
+        value is not null &&
+        (value.Equals("auto", StringComparison.OrdinalIgnoreCase) ||
+         value.Equals("aes-128-gcm", StringComparison.OrdinalIgnoreCase) ||
+         value.Equals("chacha20-poly1305", StringComparison.OrdinalIgnoreCase));
 
     private static bool TryParseSecurity(string? value, out VmessSecurityKind security)
     {

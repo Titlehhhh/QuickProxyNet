@@ -24,10 +24,10 @@ public enum VlessSecurity
 /// <see cref="VlessShareLink.Parse(string)"/> or built directly.
 /// </summary>
 /// <remarks>
-/// Only <c>tcp</c>/<c>raw</c> transport with <see cref="VlessSecurity.None"/> or
-/// <see cref="VlessSecurity.Tls"/> is supported at connect time in this release. Other
-/// fields (REALITY keys, non-empty <see cref="Flow"/>, alternate transports) are parsed
-/// so callers can inspect them, but connecting with them throws
+/// Supported at connect time: the <c>tcp</c>/<c>raw</c>, <c>ws</c> and <c>httpupgrade</c>
+/// transports with <see cref="VlessSecurity.None"/> or <see cref="VlessSecurity.Tls"/>.
+/// Other fields (REALITY keys, non-empty <see cref="Flow"/>, the <c>grpc</c>/<c>xhttp</c>
+/// transports) are parsed so callers can inspect them, but connecting with them throws
 /// <see cref="System.NotSupportedException"/>.
 /// </remarks>
 public sealed class VlessOptions
@@ -44,8 +44,23 @@ public sealed class VlessOptions
     /// <summary>Transport security layer. Defaults to <see cref="VlessSecurity.None"/>.</summary>
     public VlessSecurity Security { get; init; } = VlessSecurity.None;
 
-    /// <summary>Transport network: <c>tcp</c> or <c>raw</c> (both raw TCP). Others are unsupported.</summary>
+    /// <summary>
+    /// Transport network: <c>tcp</c>/<c>raw</c> (raw TCP), <c>ws</c>/<c>websocket</c>, or
+    /// <c>httpupgrade</c>. Others (<c>grpc</c>, <c>xhttp</c>, <c>h2</c>) are unsupported.
+    /// </summary>
     public string Transport { get; init; } = "tcp";
+
+    /// <summary>
+    /// Request path for the <c>ws</c>/<c>httpupgrade</c> transports (<c>path</c>). Defaults to
+    /// <c>/</c>. Sent verbatim, including any query such as <c>?ed=2048</c>.
+    /// </summary>
+    public string? Path { get; init; }
+
+    /// <summary>
+    /// <c>Host</c> header for the <c>ws</c>/<c>httpupgrade</c> transports (<c>host</c>).
+    /// Falls back to <see cref="Sni"/>, then to <see cref="Host"/>.
+    /// </summary>
+    public string? HostHeader { get; init; }
 
     /// <summary>TLS/REALITY server name (SNI). Falls back to <see cref="Host"/> when null.</summary>
     public string? Sni { get; init; }
@@ -68,8 +83,6 @@ public sealed class VlessOptions
     /// <summary>Human-readable label from the share-link fragment (<c>#name</c>).</summary>
     public string? Remark { get; init; }
 
-    /// <summary>True when the transport is plain TCP (<c>tcp</c> or <c>raw</c>).</summary>
-    internal bool IsRawTcp =>
-        Transport.Equals("tcp", StringComparison.OrdinalIgnoreCase) ||
-        Transport.Equals("raw", StringComparison.OrdinalIgnoreCase);
+    /// <summary>The resolved transport layer this configuration selects.</summary>
+    internal TransportKind TransportKind => ProxyTransport.Resolve(Transport);
 }

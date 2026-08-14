@@ -27,12 +27,31 @@ namespace QuickProxyNet;
 /// Evaluating an HMAC at level <c>n</c> requires two evaluations of level <c>n−1</c>
 /// (inner and outer pass), so a chain of <c>n</c> levels above the base costs
 /// <c>2^n</c> base HMAC computations — 8 for the four-element request-header
-/// derivations. This fan-out is inherent to the construction: .NET exposes no SHA-256
-/// midstate export, so the ipad/opad prefixes cannot be pre-hashed once and reused.
-/// The implementation therefore focuses on what <em>can</em> be fixed: it performs no
-/// heap allocations at all (all pads and scratch live on the stack; a pooled buffer is
-/// used only in the never-hit oversized-key fallback) and halves the number of
-/// platform-crypto calls via the one-shot base HMAC.
+/// derivations. This fan-out is inherent to the construction. The implementation
+/// therefore focuses on what <em>can</em> be fixed: it performs no heap allocations at
+/// all (all pads and scratch live on the stack; a pooled buffer is used only in the
+/// never-hit oversized-key fallback) and halves the number of platform-crypto calls via
+/// the one-shot base HMAC.
+/// </para>
+/// <para>
+/// <b>Do not replace the base HMAC with a hand-rolled midstate one. This was built and
+/// measured, and it lost.</b> The seed is a constant, so its ipad/opad blocks can be
+/// pre-hashed into SHA-256 midstates — which the platform cannot do, since neither
+/// <see cref="HMACSHA256"/> nor <see cref="IncrementalHash"/> exports a chaining state.
+/// Folding both the seed pads <em>and</em> the (per-derivation constant) innermost path
+/// element into resumable midstates cuts a four-element derivation from 46 block
+/// compressions to 24. It still does not pay, because the premise that the platform call
+/// is dominated by CNG round-trip overhead is wrong: <see cref="IncrementalHash"/> costs
+/// ~200 ns per 64-byte block here, i.e. it is compression-bound, while the managed
+/// <see cref="Sha256Core"/> costs ~312 ns per block — 1.58x more. Halving the block count
+/// only just cancels the per-block penalty. Measured interleaved on an Intel Xeon E5-2697
+/// v4 (Broadwell, no SHA-NI): the four request-header derivations went 37.2 µs -> 34.7 µs
+/// (0.94x), but a single one-element derivation went 1.93 µs -> 2.31 µs (1.20x), because
+/// its fixed setup is amortized over far fewer blocks. A real connection does five
+/// one-element derivations (<c>VmessAuthId</c> plus four in <c>VmessResponse</c>) and four
+/// three-element ones, so the two effects cancel to about 1%. On a CPU with SHA-NI the
+/// platform side gets faster still and the trade gets worse. <c>VmessKdfBenchmark</c> keeps
+/// the midstate variant so the comparison can be re-run on other hardware.
 /// </para>
 /// </remarks>
 internal static class VmessKdf

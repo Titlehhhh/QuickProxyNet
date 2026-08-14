@@ -73,7 +73,7 @@ public class VmessClientTest
         Assert.Equal(0, o.AlterId);
         Assert.Equal(VmessSecurityKind.Aes128Gcm, o.Security);
         Assert.Equal("tcp", o.Transport);
-        Assert.True(o.IsRawTcp);
+        Assert.Equal(TransportKind.RawTcp, o.TransportKind);
         Assert.True(o.UseTls);
         Assert.Equal("real.example.com", o.Sni);
         Assert.Equal("my node", o.Remark);
@@ -247,20 +247,26 @@ public class VmessClientTest
     }
 
     [Fact]
-    public void Parse_NonTcpTransport_ParsesButIsNotRawTcp()
+    public void Parse_UnsupportedTransport_ParsesButResolvesToUnsupported()
     {
         // Parsed so callers can inspect it; rejected at connect time, not here.
-        var o = VmessShareLink.Parse(Link(MinimalJson(extra: ",\"net\":\"ws\"")));
-        Assert.Equal("ws", o.Transport);
-        Assert.False(o.IsRawTcp);
+        var o = VmessShareLink.Parse(Link(MinimalJson(extra: ",\"net\":\"grpc\"")));
+        Assert.Equal("grpc", o.Transport);
+        Assert.Equal(TransportKind.Unsupported, o.TransportKind);
     }
 
     [Theory]
-    [InlineData("tcp")]
-    [InlineData("raw")]
-    public void Parse_RawTcpTransports(string net)
+    [InlineData("tcp", nameof(TransportKind.RawTcp))]
+    [InlineData("raw", nameof(TransportKind.RawTcp))]
+    [InlineData("ws", nameof(TransportKind.WebSocket))]
+    [InlineData("websocket", nameof(TransportKind.WebSocket))]
+    [InlineData("httpupgrade", nameof(TransportKind.HttpUpgrade))]
+    public void Parse_SupportedTransports(string net, string expected)
     {
-        Assert.True(VmessShareLink.Parse(Link(MinimalJson(extra: $",\"net\":\"{net}\""))).IsRawTcp);
+        // Compared by name: TransportKind is internal, and an internal parameter type cannot
+        // appear on the public signature xUnit needs to discover the theory.
+        var o = VmessShareLink.Parse(Link(MinimalJson(extra: $",\"net\":\"{net}\"")));
+        Assert.Equal(expected, o.TransportKind.ToString());
     }
 
     // ================================ share-link: rejects ================================
@@ -298,9 +304,218 @@ public class VmessClientTest
         Assert.False(VmessShareLink.TryParse(
             Link("""{"add":"a.example.com","port":"443"}"""), out _));
         Assert.False(VmessShareLink.TryParse(Link(MinimalJson(id: "")), out _));
-        Assert.False(VmessShareLink.TryParse(Link(MinimalJson(id: "not-a-uuid")), out _));
+        // 31 chars: outside Xray's 1..30 derivation window and not a canonical UUID.
+        Assert.False(VmessShareLink.TryParse(Link(MinimalJson(id: new string('x', 31))), out _));
+        // 34 chars: inside the canonical window, so it is parsed as hex — and it is truncated.
         Assert.False(VmessShareLink.TryParse(
             Link(MinimalJson(id: "11223344-5566-7788-99aa-bbccddeeff")), out _));
+    }
+
+    // ===================== grammar 1b: '#remark' appended after the base64 =====================
+    //
+    // 184 of the 423 real-world vmess links in the corpus put the remark after the base64
+    // payload instead of in the JSON's "ps". '#' is in neither base64 alphabet, so the
+    // split is unambiguous.
+
+    [Fact]
+    public void TryParse_FragmentAfterBase64_IsRemark_NotPayload()
+    {
+        Assert.True(VmessShareLink.TryParse(Link(MinimalJson()) + "#My%20Node", out var o));
+        Assert.Equal(ProxyHost, o.Host);
+        Assert.Equal("My Node", o.Remark);
+    }
+
+    [Fact]
+    public void TryParse_FragmentAfterBase64_DoesNotOverrideJsonPs()
+    {
+        string json = MinimalJson(extra: ",\"ps\":\"from json\"");
+        Assert.True(VmessShareLink.TryParse(Link(json) + "#from fragment", out var o));
+        Assert.Equal("from json", o.Remark);
+    }
+
+    [Fact]
+    public void TryParse_EmptyFragmentAfterBase64_IsIgnored()
+    {
+        Assert.True(VmessShareLink.TryParse(Link(MinimalJson()) + "#", out var o));
+        Assert.Null(o.Remark);
+    }
+
+    // ===================== grammar 2: the standard URI form =====================
+    //
+    // vmess://{uuid}@{host}:{port}?{query}#{remark} — 48 links in the corpus. The query
+    // keys mean DIFFERENT things than the JSON fields: type=transport (JSON 'net'),
+    // headerType=obfuscation (JSON 'type'), encryption=body cipher (JSON 'scy'),
+    // security=transport security (JSON 'tls').
+
+    [Fact]
+    public void TryParse_StandardUri_MapsQueryKeysToTheRightFields()
+    {
+        Assert.True(VmessShareLink.TryParse(
+            $"vmess://{Uuid}@cdn.example.com:8443" +
+            "?encryption=chacha20-poly1305&type=tcp&security=tls&sni=real.example.com" +
+            "&alpn=h2,http/1.1#my%20node",
+            out var o));
+
+        Assert.Equal(Uuid, o.Id);
+        Assert.Equal("cdn.example.com", o.Host);
+        Assert.Equal(8443, o.Port);
+        Assert.Equal(VmessSecurityKind.ChaCha20Poly1305, o.Security);  // from 'encryption'
+        Assert.Equal("tcp", o.Transport);                              // from 'type'
+        Assert.True(o.UseTls);                                         // from 'security'
+        Assert.Equal("real.example.com", o.Sni);
+        Assert.Equal(["h2", "http/1.1"], o.Alpn);
+        Assert.Equal("my node", o.Remark);
+        Assert.Equal(0, o.AlterId);
+    }
+
+    // 'security' carries either meaning in the wild. These pin the disambiguation, which is
+    // by value rather than by guess — see the comment in TryParseStandardUri.
+
+    [Theory]
+    [InlineData("auto", nameof(VmessSecurityKind.Auto))]
+    [InlineData("aes-128-gcm", nameof(VmessSecurityKind.Aes128Gcm))]
+    [InlineData("chacha20-poly1305", nameof(VmessSecurityKind.ChaCha20Poly1305))]
+    public void TryParse_StandardUri_SecurityHoldingABodyCipher_IsReadAsOne(string value, string expected)
+    {
+        // 611 corpus links (27% of all vmess) look exactly like this. Rejecting them as an
+        // unrecognized transport security made every one of them unusable.
+        Assert.True(VmessShareLink.TryParse(
+            $"vmess://{Uuid}@a.example.com:443?type=tcp&security={value}", out var o));
+
+        Assert.Equal(expected, o.Security.ToString());
+        Assert.False(o.UseTls);
+    }
+
+    [Fact]
+    public void TryParse_StandardUri_SecurityTls_StillMeansTls()
+    {
+        // The disambiguation must not cost the documented reading.
+        Assert.True(VmessShareLink.TryParse(
+            $"vmess://{Uuid}@a.example.com:443?type=tcp&security=tls", out var o));
+        Assert.True(o.UseTls);
+    }
+
+    [Fact]
+    public void TryParse_StandardUri_SecurityNone_StaysTransportSecurity()
+    {
+        // 'none' is valid in both vocabularies. It keeps its documented meaning, and both
+        // readings agree there is no TLS — so the ambiguity costs nothing here.
+        Assert.True(VmessShareLink.TryParse(
+            $"vmess://{Uuid}@a.example.com:443?type=tcp&security=none", out var o));
+        Assert.False(o.UseTls);
+        Assert.Equal(VmessSecurityKind.Auto, o.Security);
+    }
+
+    [Fact]
+    public void TryParse_StandardUri_SecurityRealityIsStillRejected()
+    {
+        Assert.False(VmessShareLink.TryParse(
+            $"vmess://{Uuid}@a.example.com:443?type=tcp&security=reality&pbk=x", out _));
+    }
+
+    [Fact]
+    public void TryParse_StandardUri_VlessStyleEncryptionNone_IsTreatedAsUnspecified()
+    {
+        // Producers copy VLESS's mandatory 'encryption=none' onto vmess links, where it does
+        // not mean VMess's unencrypted body mode.
+        Assert.True(VmessShareLink.TryParse(
+            $"vmess://{Uuid}@a.example.com:443?encryption=none&type=ws&security=tls&path=/x", out var o));
+
+        Assert.Equal(VmessSecurityKind.Auto, o.Security);
+        Assert.True(o.UseTls);
+    }
+
+    [Fact]
+    public void TryParse_StandardUri_UnknownTransportSecurity_IsStillRejected()
+    {
+        // Anything belonging to neither vocabulary must still fail rather than default to
+        // plaintext.
+        Assert.False(VmessShareLink.TryParse(
+            $"vmess://{Uuid}@a.example.com:443?type=tcp&security=quic", out _));
+    }
+
+    [Fact]
+    public void TryParse_StandardUri_TypeIsTransport_NotObfuscation()
+    {
+        // 'type=ws' must set the transport, NOT be rejected as a header obfuscation.
+        Assert.True(VmessShareLink.TryParse(
+            $"vmess://{Uuid}@a.example.com:443?encryption=auto&type=ws&path=/x", out var o));
+        Assert.Equal("ws", o.Transport);
+    }
+
+    [Fact]
+    public void TryParse_StandardUri_DefaultsToTcpAndAuto()
+    {
+        Assert.True(VmessShareLink.TryParse($"vmess://{Uuid}@a.example.com:443", out var o));
+        Assert.Equal("tcp", o.Transport);
+        Assert.Equal(VmessSecurityKind.Auto, o.Security);
+        Assert.False(o.UseTls);
+        Assert.Equal("a.example.com", o.Sni);
+    }
+
+    [Fact]
+    public void TryParse_StandardUri_HeaderTypeRejectedOnlyOnTcp()
+    {
+        Assert.False(VmessShareLink.TryParse(
+            $"vmess://{Uuid}@a.example.com:443?type=tcp&headerType=http", out _));
+
+        // Meaningless on ws, so real clients ignore it — and so must we.
+        Assert.True(VmessShareLink.TryParse(
+            $"vmess://{Uuid}@a.example.com:443?type=ws&headerType=http", out _));
+    }
+
+    [Fact]
+    public void TryParse_StandardUri_Reality_IsRejected()
+    {
+        Assert.False(VmessShareLink.TryParse(
+            $"vmess://{Uuid}@a.example.com:443?security=reality&pbk=x", out _));
+    }
+
+    [Fact]
+    public void TryParse_StandardUri_UnknownTransportSecurity_NoSilentPlaintextDowngrade()
+    {
+        // A typo like security=tsl must NOT quietly become plaintext.
+        Assert.False(VmessShareLink.TryParse(
+            $"vmess://{Uuid}@a.example.com:443?security=tsl", out _));
+    }
+
+    [Fact]
+    public void TryParse_StandardUri_IPv6Host_StripsBrackets()
+    {
+        Assert.True(VmessShareLink.TryParse($"vmess://{Uuid}@[2001:db8::1]:443", out var o));
+        Assert.Equal("2001:db8::1", o.Host);
+    }
+
+    [Fact]
+    public void TryParse_StandardUri_AllowInsecureAliases()
+    {
+        Assert.True(VmessShareLink.TryParse(
+            $"vmess://{Uuid}@a.example.com:443?security=tls&allowInsecure=1", out var o));
+        Assert.True(o.AllowInsecure);
+    }
+
+    // ===================== 'type' on the JSON grammar =====================
+
+    [Fact]
+    public void TryParse_Json_HeaderTypeRejectedOnlyOnTcp()
+    {
+        Assert.False(VmessShareLink.TryParse(
+            Link(MinimalJson(extra: ",\"net\":\"tcp\",\"type\":\"http\"")), out _));
+
+        // 16 corpus links carry junk in 'type' while running over ws, where the field has
+        // no meaning at all.
+        Assert.True(VmessShareLink.TryParse(
+            Link(MinimalJson(extra: ",\"net\":\"ws\",\"type\":\"---\"")), out var o));
+        Assert.Equal("ws", o.Transport);
+    }
+
+    [Fact]
+    public void TryParse_ShortNonUuidId_IsAccepted_AndKeptVerbatim()
+    {
+        // Xray maps a 1..30 character id to UUIDv5(nil, id) rather than rejecting it.
+        // The options keep the id as written; the derivation happens at the wire encoder.
+        Assert.True(VmessShareLink.TryParse(Link(MinimalJson(id: "not-a-uuid")), out var o));
+        Assert.Equal("not-a-uuid", o.Id);
     }
 
     [Theory]
@@ -426,9 +641,9 @@ public class VmessClientTest
 
     [Theory]
     [InlineData("")]
-    [InlineData("not-a-uuid")]
-    [InlineData("11223344-5566-7788-99aa-bbccddeeff")]
-    public void Client_InvalidUuid_ThrowsAtConstruction(string id)
+    [InlineData("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")]        // 31: past the derivation window
+    [InlineData("11223344-5566-7788-99aa-bbccddeeff")]      // 34: canonical window, truncated
+    public void Client_UnusableUuid_ThrowsAtConstruction(string id)
     {
         Assert.Throws<ArgumentException>(() => new VmessClient(Options(id: id)));
     }
@@ -522,10 +737,9 @@ public class VmessClientTest
     }
 
     [Theory]
-    [InlineData("ws")]
     [InlineData("grpc")]
     [InlineData("h2")]
-    [InlineData("httpupgrade")]
+    [InlineData("xhttp")]
     public async Task Client_UnsupportedTransport_ThrowsNotSupported_BeforeWritingAnything(string net)
     {
         var transport = new ScriptedDuplexStream();

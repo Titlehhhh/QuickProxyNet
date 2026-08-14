@@ -19,9 +19,20 @@ namespace QuickProxyNet.Benchmarks;
 [Config(typeof(Config))]
 public class Sha224Benchmark
 {
+    /// <summary>
+    /// <see cref="Job.ShortRun"/> by default; set <c>QPN_BENCH_LONG=1</c> for a multi-launch
+    /// job whose reported error is small enough to defend a per-block timing claim.
+    /// </summary>
     private class Config : ManualConfig
     {
-        public Config() => AddJob(Job.ShortRun.WithToolchain(InProcessNoEmitToolchain.Instance));
+        public Config()
+        {
+            Job job = Environment.GetEnvironmentVariable("QPN_BENCH_LONG") == "1"
+                ? Job.Default.WithLaunchCount(3).WithWarmupCount(5).WithIterationCount(20)
+                : Job.ShortRun;
+
+            AddJob(job.WithToolchain(InProcessNoEmitToolchain.Instance));
+        }
     }
 
     private readonly byte[] _password = "correct-horse-battery-staple"u8.ToArray(); // 28 bytes

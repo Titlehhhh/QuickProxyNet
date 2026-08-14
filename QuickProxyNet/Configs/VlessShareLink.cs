@@ -43,10 +43,23 @@ public static class VlessShareLink
             return false;
         }
 
-        if (!Uri.TryCreate(shareLink.Trim(), UriKind.Absolute, out var uri) ||
-            !uri.Scheme.Equals("vless", StringComparison.OrdinalIgnoreCase))
+        string trimmed = shareLink.Trim();
+        if (!trimmed.StartsWith("vless://", StringComparison.OrdinalIgnoreCase))
         {
             error = "VLESS share link must start with 'vless://'.";
+            return false;
+        }
+
+        // Report the real problem. Claiming the scheme is wrong when it plainly is not
+        // sends whoever reads the message hunting in the wrong place; in the wild these
+        // are links whose generator left "&key=value" in the authority before the '?', or
+        // bracketed a host that is not an IPv6 literal.
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+        {
+            error =
+                "VLESS share link is not a well-formed URI. Expected " +
+                "'vless://{id}@{host}:{port}?{query}#{remark}'; check for stray characters " +
+                "in the host:port part (a '&' before the first '?' is the usual cause).";
             return false;
         }
 
@@ -60,7 +73,9 @@ public static class VlessShareLink
         Span<byte> probe = stackalloc byte[UuidCodec.Size];
         if (!UuidCodec.TryWriteBigEndian(id, probe))
         {
-            error = $"VLESS user id '{id}' is not a valid UUID.";
+            error =
+                $"VLESS user id '{id}' is unusable: it is neither a canonical UUID nor a " +
+                "string of 1..30 characters (which would be mapped to a UUID).";
             return false;
         }
 
@@ -85,7 +100,7 @@ public static class VlessShareLink
         // Defaults.
         var security = VlessSecurity.None;
         string transport = "tcp";
-        string? sni = null, flow = null, fp = null, pbk = null, sid = null;
+        string? sni = null, flow = null, fp = null, pbk = null, sid = null, path = null, hostHeader = null;
         IReadOnlyList<string>? alpn = null;
 
         // Single-pass query scan. uri.Query includes a leading '?'.
@@ -103,7 +118,7 @@ public static class VlessShareLink
                 if (eq < 0)
                     continue;
 
-                ReadOnlySpan<char> key = pair.Slice(0, eq);
+                ReadOnlySpan<char> key = ShareLinkQuery.StripHtmlAmpPrefix(pair.Slice(0, eq));
                 ReadOnlySpan<char> rawVal = pair.Slice(eq + 1);
                 if (rawVal.IsEmpty)
                     continue;
@@ -117,7 +132,9 @@ public static class VlessShareLink
                     {
                         // Do NOT default an unknown value to None — that would silently send
                         // the VLESS header (with the UUID) in cleartext to a TLS/REALITY server.
-                        error = $"Unrecognized VLESS security '{rawVal.ToString()}'.";
+                        error =
+                            $"Unrecognized VLESS security '{rawVal.ToString()}': expected " +
+                            "'none', 'tls' or 'reality'.";
                         return false;
                     }
                 }
@@ -135,6 +152,10 @@ public static class VlessShareLink
                     pbk = Decode(rawVal);
                 else if (key.Equals("sid", StringComparison.OrdinalIgnoreCase))
                     sid = Decode(rawVal);
+                else if (key.Equals("path", StringComparison.OrdinalIgnoreCase))
+                    path = Decode(rawVal);
+                else if (key.Equals("host", StringComparison.OrdinalIgnoreCase))
+                    hostHeader = Decode(rawVal);
             }
         }
 
@@ -151,6 +172,8 @@ public static class VlessShareLink
             Transport = transport,
             Sni = sni,
             Alpn = alpn,
+            Path = path,
+            HostHeader = hostHeader,
             Flow = string.IsNullOrEmpty(flow) ? null : flow,
             Fingerprint = fp,
             RealityPublicKey = pbk,

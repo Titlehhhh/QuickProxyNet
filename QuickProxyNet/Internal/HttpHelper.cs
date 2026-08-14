@@ -112,12 +112,7 @@ internal static class HttpHelper
             switch (statusCode)
             {
                 case 200:
-                    if (parser.HasOverreadBytes)
-                    {
-                        byte[] overread = parser.OverreadBytes.ToArray();
-                        return new PrefixedStream(overread, stream);
-                    }
-                    return stream;
+                    return PrefixedStream.WrapIfNeeded(parser.OverreadBytes, stream);
                 case 407:
                     throw new ProxyProtocolException(ProxyErrorCode.AuthRequired,
                         $"Proxy authentication required (407) for {host}:{port}.");
@@ -135,69 +130,4 @@ internal static class HttpHelper
         }
     }
 
-    private sealed class PrefixedStream(byte[] prefix, Stream inner) : Stream
-    {
-        private int _offset;
-
-        public override bool CanRead => true;
-        public override bool CanSeek => false;
-        public override bool CanWrite => inner.CanWrite;
-        public override long Length => throw new NotSupportedException();
-
-        public override long Position
-        {
-            get => throw new NotSupportedException();
-            set => throw new NotSupportedException();
-        }
-
-        public override void Flush() => inner.Flush();
-        public override Task FlushAsync(CancellationToken ct) => inner.FlushAsync(ct);
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-        public override void SetLength(long value) => throw new NotSupportedException();
-
-        public override int Read(Span<byte> buffer)
-        {
-            if (_offset < prefix.Length)
-            {
-                int count = Math.Min(buffer.Length, prefix.Length - _offset);
-                prefix.AsSpan(_offset, count).CopyTo(buffer);
-                _offset += count;
-                return count;
-            }
-            return inner.Read(buffer);
-        }
-
-        public override int Read(byte[] buffer, int offset, int count) =>
-            Read(buffer.AsSpan(offset, count));
-
-        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
-        {
-            if (_offset < prefix.Length)
-            {
-                int count = Math.Min(buffer.Length, prefix.Length - _offset);
-                prefix.AsMemory(_offset, count).CopyTo(buffer);
-                _offset += count;
-                return count;
-            }
-            return await inner.ReadAsync(buffer, ct);
-        }
-
-        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>
-            ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
-
-        public override void Write(byte[] buffer, int offset, int count) => inner.Write(buffer, offset, count);
-        public override void Write(ReadOnlySpan<byte> buffer) => inner.Write(buffer);
-        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default) =>
-            inner.WriteAsync(buffer, ct);
-        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>
-            inner.WriteAsync(buffer, offset, count, ct);
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing) inner.Dispose();
-            base.Dispose(disposing);
-        }
-
-        public override ValueTask DisposeAsync() => inner.DisposeAsync();
-    }
 }

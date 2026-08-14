@@ -19,8 +19,9 @@ namespace QuickProxyNet;
 /// signals end-of-stream in band.
 /// </para>
 /// <para>
-/// Only <c>tcp</c>/<c>raw</c> transport is supported; <c>ws</c>, <c>grpc</c> and <c>h2</c>
-/// are rejected with <see cref="NotSupportedException"/> before any bytes are written.
+/// The <c>tcp</c>/<c>raw</c>, <c>ws</c> and <c>httpupgrade</c> transports are supported;
+/// <c>grpc</c> and <c>h2</c> are rejected with <see cref="NotSupportedException"/> before
+/// any bytes are written.
 /// </para>
 /// <para>
 /// VMess is time-sensitive: the AuthID embeds the current UTC second and servers reject
@@ -65,8 +66,14 @@ public sealed class VmessClient : ProxyClient
         // Validate up front so a bad configuration fails at construction rather than
         // mid-connect (the share-link path already checked both, but a directly-built
         // VmessOptions may not have).
-        if (!Guid.TryParse(options.Id, out _))
-            throw new ArgumentException($"VMess user id '{options.Id}' is not a valid UUID.", nameof(options));
+        // Must use the same rule as the wire encoder: Guid.TryParse alone would reject the
+        // short non-UUID ids that UuidCodec — and Xray — map to a derived UUID.
+        Span<byte> probe = stackalloc byte[UuidCodec.Size];
+        if (!UuidCodec.TryWriteBigEndian(options.Id, probe))
+            throw new ArgumentException(
+                $"VMess user id '{options.Id}' is unusable: it is neither a canonical UUID nor " +
+                "a string of 1..30 characters (which would be mapped to a UUID).",
+                nameof(options));
 
         if (options.AlterId != 0)
             throw new ArgumentException(
@@ -117,24 +124,32 @@ public sealed class VmessClient : ProxyClient
         ArgumentNullException.ThrowIfNull(stream);
 
         // Reject unsupported transports and ciphers before writing any bytes or starting TLS.
-        VmessSecurity security = EnsureSupported();
+        VmessSecurity security = EnsureSupported(out TransportKind transportKind);
 
-        Stream transport = stream;
-        if (Options.UseTls)
+        // Each layer owns the one below it, so tracking the outermost stream is enough to
+        // unwind the whole stack on failure.
+        Stream layered = stream;
+        try
         {
-            var ssl = new SslStream(stream, leaveInnerStreamOpen: false);
-            try
-            {
-                await ssl.AuthenticateAsClientAsync(BuildSslOptions(), cancellationToken).ConfigureAwait(false);
-            }
-            catch
+            if (Options.UseTls)
             {
                 // SslStream(leaveInnerStreamOpen:false) disposes the inner stream too.
-                await ssl.DisposeAsync().ConfigureAwait(false);
-                throw;
+                var ssl = new SslStream(layered, leaveInnerStreamOpen: false);
+                layered = ssl;
+                await ssl.AuthenticateAsClientAsync(BuildSslOptions(), cancellationToken).ConfigureAwait(false);
             }
 
-            transport = ssl;
+            layered = await ProxyTransport.ApplyAsync(
+                transportKind,
+                layered,
+                Options.Path,
+                ProxyTransport.ResolveHostHeader(Options.HostHeader, Options.Sni, Options.Host),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await layered.DisposeAsync().ConfigureAwait(false);
+            throw;
         }
 
         byte[] request = ArrayPool<byte>.Shared.Rent(VmessRequest.MaxRequestSize);
@@ -143,17 +158,17 @@ public sealed class VmessClient : ProxyClient
         {
             int length = BuildHandshake(request, session, security, host, port, out byte responseVerifier);
 
-            await transport.WriteAsync(request.AsMemory(0, length), cancellationToken).ConfigureAwait(false);
-            await transport.FlushAsync(cancellationToken).ConfigureAwait(false);
+            await layered.WriteAsync(request.AsMemory(0, length), cancellationToken).ConfigureAwait(false);
+            await layered.FlushAsync(cancellationToken).ConfigureAwait(false);
 
-            return CreateBodyStream(transport, session, responseVerifier, security);
+            return CreateBodyStream(layered, session, responseVerifier, security);
         }
         catch
         {
-            // Owns the TLS session as well when one was established. A half-built
-            // VmessResponseStream holds no unmanaged state, so disposing the transport is
+            // Owns the TLS session and the transport layer as well. A half-built
+            // VmessResponseStream holds no unmanaged state, so disposing the stack is
             // enough to release everything.
-            await transport.DisposeAsync().ConfigureAwait(false);
+            await layered.DisposeAsync().ConfigureAwait(false);
             throw;
         }
         finally
@@ -234,11 +249,13 @@ public sealed class VmessClient : ProxyClient
     /// Validates everything that cannot be expressed in the type system, and resolves the
     /// body cipher. Runs before any byte is written or any TLS handshake is started.
     /// </summary>
-    private VmessSecurity EnsureSupported()
+    private VmessSecurity EnsureSupported(out TransportKind transportKind)
     {
-        if (!Options.IsRawTcp)
+        transportKind = Options.TransportKind;
+        if (transportKind == TransportKind.Unsupported)
             throw new NotSupportedException(
-                $"VMess transport '{Options.Transport}' is not supported; only 'tcp'/'raw' is implemented.");
+                $"VMess transport '{Options.Transport}' is not supported; 'tcp'/'raw', 'ws' and " +
+                "'httpupgrade' are implemented.");
 
         VmessSecurity security = Options.ResolveSecurity();
 
@@ -252,7 +269,9 @@ public sealed class VmessClient : ProxyClient
 
     private SslClientAuthenticationOptions BuildSslOptions() => new()
     {
-        TargetHost = Options.Sni ?? Options.Host,
+        // Same precedence Xray applies: explicit SNI, else the transport Host header, else the
+        // server address. A ws+tls node commonly sets only 'host'.
+        TargetHost = Options.Sni ?? Options.HostHeader ?? Options.Host,
         EnabledSslProtocols = SslProtocols,
         RemoteCertificateValidationCallback = Options.AllowInsecure
             ? static (_, _, _, _) => true

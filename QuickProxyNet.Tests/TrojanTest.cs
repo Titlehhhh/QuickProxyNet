@@ -20,7 +20,7 @@ public class TrojanTest
         Assert.Equal("example.com", o.Host);
         Assert.Equal(443, o.Port);
         Assert.Equal("tcp", o.Transport);
-        Assert.True(o.IsRawTcp);
+        Assert.Equal(TransportKind.RawTcp, o.TransportKind);
         Assert.Equal("node1", o.Remark);
         Assert.False(o.AllowInsecure);
     }
@@ -174,7 +174,7 @@ public class TrojanTest
         // AuthenticateAsClientAsync would fail with a different exception.
         var stream = new FakeProxyStream([]);
         var client = new TrojanClient(
-            TrojanShareLink.Parse("trojan://pw@example.com:443?type=ws"));
+            TrojanShareLink.Parse("trojan://pw@example.com:443?type=grpc"));
 
         await Assert.ThrowsAsync<NotSupportedException>(
             () => client.ConnectAsync(stream, "example.org", 443, CancellationToken.None).AsTask());

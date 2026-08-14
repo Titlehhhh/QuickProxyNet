@@ -43,10 +43,20 @@ public static class TrojanShareLink
             return false;
         }
 
-        if (!Uri.TryCreate(shareLink.Trim(), UriKind.Absolute, out var uri) ||
-            !uri.Scheme.Equals("trojan", StringComparison.OrdinalIgnoreCase))
+        string trimmed = shareLink.Trim();
+        if (!trimmed.StartsWith("trojan://", StringComparison.OrdinalIgnoreCase))
         {
             error = "Trojan share link must start with 'trojan://'.";
+            return false;
+        }
+
+        // Say what is actually wrong rather than blaming the scheme, which is plainly right.
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+        {
+            error =
+                "Trojan share link is not a well-formed URI. Expected " +
+                "'trojan://{password}@{host}:{port}?{query}#{remark}'; check for stray " +
+                "characters in the host:port part.";
             return false;
         }
 
@@ -77,7 +87,7 @@ public static class TrojanShareLink
 
         // Defaults.
         string transport = "tcp";
-        string? sni = null;
+        string? sni = null, path = null, hostHeader = null;
         IReadOnlyList<string>? alpn = null;
         bool allowInsecure = false;
 
@@ -96,7 +106,7 @@ public static class TrojanShareLink
                 if (eq < 0)
                     continue;
 
-                ReadOnlySpan<char> key = pair.Slice(0, eq);
+                ReadOnlySpan<char> key = ShareLinkQuery.StripHtmlAmpPrefix(pair.Slice(0, eq));
                 ReadOnlySpan<char> rawVal = pair.Slice(eq + 1);
                 if (rawVal.IsEmpty)
                     continue;
@@ -113,6 +123,10 @@ public static class TrojanShareLink
                 else if (key.Equals("allowInsecure", StringComparison.OrdinalIgnoreCase) ||
                          key.Equals("insecure", StringComparison.OrdinalIgnoreCase))
                     allowInsecure = IsTruthy(rawVal);
+                else if (key.Equals("path", StringComparison.OrdinalIgnoreCase))
+                    path = Decode(rawVal);
+                else if (key.Equals("host", StringComparison.OrdinalIgnoreCase))
+                    hostHeader = Decode(rawVal);
             }
         }
 
@@ -128,6 +142,8 @@ public static class TrojanShareLink
             Transport = transport,
             Sni = sni,
             Alpn = alpn,
+            Path = path,
+            HostHeader = hostHeader,
             AllowInsecure = allowInsecure,
             Remark = remark
         };

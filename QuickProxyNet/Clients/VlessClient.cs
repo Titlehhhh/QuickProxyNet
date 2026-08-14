@@ -6,8 +6,9 @@ namespace QuickProxyNet;
 
 /// <summary>
 /// Connects to a target host through a VLESS proxy. Supports <c>security=none</c> (plain
-/// TCP) and <c>security=tls</c> (over <see cref="SslStream"/>) with <c>tcp</c>/<c>raw</c>
-/// transport. REALITY, non-empty <c>flow</c>, and alternate transports are rejected with
+/// TCP) and <c>security=tls</c> (over <see cref="SslStream"/>), each over the
+/// <c>tcp</c>/<c>raw</c>, <c>ws</c> or <c>httpupgrade</c> transport. REALITY, non-empty
+/// <c>flow</c>, and the remaining transports are rejected with
 /// <see cref="NotSupportedException"/>.
 /// </summary>
 public sealed class VlessClient : ProxyClient
@@ -20,10 +21,16 @@ public sealed class VlessClient : ProxyClient
     public VlessClient(VlessOptions options)
         : base("vless", (options ?? throw new ArgumentNullException(nameof(options))).Host, options.Port)
     {
-        // Validate the id up front so a bad UUID fails at construction rather than mid-connect
-        // (the share-link path already validated it, but a directly-built VlessOptions may not have).
-        if (!Guid.TryParse(options.Id, out _))
-            throw new ArgumentException($"VLESS user id '{options.Id}' is not a valid UUID.", nameof(options));
+        // Validate the id up front so a bad one fails at construction rather than mid-connect
+        // (the share-link path already validated it, but a directly-built VlessOptions may not
+        // have). This must use the same rule as the wire encoder: Guid.TryParse alone would
+        // reject the short non-UUID ids that UuidCodec — and Xray — map to a derived UUID.
+        Span<byte> probe = stackalloc byte[UuidCodec.Size];
+        if (!UuidCodec.TryWriteBigEndian(options.Id, probe))
+            throw new ArgumentException(
+                $"VLESS user id '{options.Id}' is unusable: it is neither a canonical UUID nor " +
+                "a string of 1..30 characters (which would be mapped to a UUID).",
+                nameof(options));
 
         Options = options;
         _alpn = BuildAlpn(options.Alpn);
@@ -47,47 +54,59 @@ public sealed class VlessClient : ProxyClient
     /// <summary>TLS protocol versions offered to the proxy. Defaults to TLS 1.2 and 1.3.</summary>
     public SslProtocols SslProtocols { get; set; } = SslProtocols.Tls12 | SslProtocols.Tls13;
 
+    /// <summary>
+    /// Writes the VLESS request header over <paramref name="stream"/> (inside TLS when
+    /// <see cref="VlessOptions.Security"/> is <see cref="VlessSecurity.Tls"/>) and returns the
+    /// tunnel to <paramref name="host"/>:<paramref name="port"/>.
+    /// </summary>
+    /// <remarks>
+    /// Only the request header is written here. The server response header is validated lazily
+    /// on the first read (see <c>VlessResponseStream</c>), because neither Xray nor sing-box
+    /// flushes it until the target produces data — reading it eagerly would deadlock every
+    /// client-speaks-first protocol.
+    /// </remarks>
     public override async ValueTask<Stream> ConnectAsync(Stream stream, string host, int port,
         CancellationToken cancellationToken = default)
     {
-        EnsureSupported();
+        TransportKind transport = EnsureSupported();
 
-        if (Options.Security == VlessSecurity.Tls)
-        {
-            var ssl = new SslStream(stream, leaveInnerStreamOpen: false);
-            try
-            {
-                await ssl.AuthenticateAsClientAsync(BuildSslOptions(), cancellationToken).ConfigureAwait(false);
-                await VlessHelper.EstablishVlessTunnelAsync(ssl, Options, host, port, cancellationToken)
-                    .ConfigureAwait(false);
-                return ssl;
-            }
-            catch
-            {
-                // SslStream(leaveInnerStreamOpen:false) disposes the inner stream too.
-                await ssl.DisposeAsync().ConfigureAwait(false);
-                throw;
-            }
-        }
-
+        // Each layer takes ownership of the one below it, so tracking the outermost stream is
+        // enough to unwind the whole stack on failure.
+        Stream layered = stream;
         try
         {
-            await VlessHelper.EstablishVlessTunnelAsync(stream, Options, host, port, cancellationToken)
+            if (Options.Security == VlessSecurity.Tls)
+            {
+                // SslStream(leaveInnerStreamOpen:false) disposes the inner stream too.
+                var ssl = new SslStream(layered, leaveInnerStreamOpen: false);
+                layered = ssl;
+                await ssl.AuthenticateAsClientAsync(BuildSslOptions(), cancellationToken).ConfigureAwait(false);
+            }
+
+            layered = await ProxyTransport.ApplyAsync(
+                transport,
+                layered,
+                Options.Path,
+                ProxyTransport.ResolveHostHeader(Options.HostHeader, Options.Sni, Options.Host),
+                cancellationToken).ConfigureAwait(false);
+
+            return await VlessHelper.EstablishVlessTunnelAsync(layered, Options, host, port, cancellationToken)
                 .ConfigureAwait(false);
-            return stream;
         }
         catch
         {
-            await stream.DisposeAsync().ConfigureAwait(false);
+            await layered.DisposeAsync().ConfigureAwait(false);
             throw;
         }
     }
 
-    private void EnsureSupported()
+    private TransportKind EnsureSupported()
     {
-        if (!Options.IsRawTcp)
+        TransportKind transport = Options.TransportKind;
+        if (transport == TransportKind.Unsupported)
             throw new NotSupportedException(
-                $"VLESS transport '{Options.Transport}' is not supported; only 'tcp'/'raw' is implemented.");
+                $"VLESS transport '{Options.Transport}' is not supported; 'tcp'/'raw', 'ws' and " +
+                "'httpupgrade' are implemented.");
 
         if (Options.Security == VlessSecurity.Reality)
             throw new NotSupportedException(
@@ -96,11 +115,15 @@ public sealed class VlessClient : ProxyClient
         if (!string.IsNullOrEmpty(Options.Flow))
             throw new NotSupportedException(
                 $"VLESS flow '{Options.Flow}' (XTLS) is not supported in this release.");
+
+        return transport;
     }
 
     private SslClientAuthenticationOptions BuildSslOptions() => new()
     {
-        TargetHost = Options.Sni ?? Options.Host,
+        // Same precedence Xray applies: explicit SNI, else the transport Host header, else the
+        // server address. A ws+tls node commonly sets only 'host'.
+        TargetHost = Options.Sni ?? Options.HostHeader ?? Options.Host,
         EnabledSslProtocols = SslProtocols,
         RemoteCertificateValidationCallback = ServerCertificateValidationCallback,
         ApplicationProtocols = _alpn

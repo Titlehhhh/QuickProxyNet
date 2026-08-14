@@ -23,9 +23,22 @@ namespace QuickProxyNet.Benchmarks;
 [Config(typeof(Config))]
 public class VmessBenchmark
 {
+    /// <summary>
+    /// <see cref="Job.ShortRun"/> by default (fast, but too noisy to defend a small delta).
+    /// Set <c>QPN_BENCH_LONG=1</c> to switch to a multi-launch job with enough iterations
+    /// that the reported error/StdDev is meaningful — use that when a timing change has to
+    /// be claimed, not just observed.
+    /// </summary>
     private class Config : ManualConfig
     {
-        public Config() => AddJob(Job.ShortRun.WithToolchain(InProcessNoEmitToolchain.Instance));
+        public Config()
+        {
+            Job job = Environment.GetEnvironmentVariable("QPN_BENCH_LONG") == "1"
+                ? Job.Default.WithLaunchCount(3).WithWarmupCount(5).WithIterationCount(20)
+                : Job.ShortRun;
+
+            AddJob(job.WithToolchain(InProcessNoEmitToolchain.Instance));
+        }
     }
 
     private const string Uuid = "11223344-5566-7788-99aa-bbccddeeff00";

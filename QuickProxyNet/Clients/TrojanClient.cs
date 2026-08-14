@@ -6,8 +6,8 @@ namespace QuickProxyNet;
 
 /// <summary>
 /// Connects to a target host through a Trojan proxy. Trojan is TLS-mandatory: the request
-/// header is written inside an <see cref="SslStream"/> session. Only <c>tcp</c>/<c>raw</c>
-/// transport is supported; alternate transports are rejected with
+/// header is written inside an <see cref="SslStream"/> session, over the <c>tcp</c>/<c>raw</c>,
+/// <c>ws</c> or <c>httpupgrade</c> transport. The remaining transports are rejected with
 /// <see cref="NotSupportedException"/>.
 /// </summary>
 public sealed class TrojanClient : ProxyClient
@@ -53,34 +53,50 @@ public sealed class TrojanClient : ProxyClient
         CancellationToken cancellationToken = default)
     {
         // Reject unsupported transports before writing any bytes or starting the handshake.
-        EnsureSupported();
+        TransportKind transport = EnsureSupported();
 
-        var ssl = new SslStream(stream, leaveInnerStreamOpen: false);
+        // SslStream(leaveInnerStreamOpen:false) disposes the inner stream too, and every layer
+        // above it likewise owns the one below — so unwinding the outermost unwinds all of them.
+        Stream layered = new SslStream(stream, leaveInnerStreamOpen: false);
         try
         {
-            await ssl.AuthenticateAsClientAsync(BuildSslOptions(), cancellationToken).ConfigureAwait(false);
-            await TrojanHelper.EstablishTrojanTunnelAsync(ssl, Options, host, port, cancellationToken)
+            await ((SslStream)layered).AuthenticateAsClientAsync(BuildSslOptions(), cancellationToken)
                 .ConfigureAwait(false);
-            return ssl;
+
+            layered = await ProxyTransport.ApplyAsync(
+                transport,
+                layered,
+                Options.Path,
+                ProxyTransport.ResolveHostHeader(Options.HostHeader, Options.Sni, Options.Host),
+                cancellationToken).ConfigureAwait(false);
+
+            await TrojanHelper.EstablishTrojanTunnelAsync(layered, Options, host, port, cancellationToken)
+                .ConfigureAwait(false);
+            return layered;
         }
         catch
         {
-            // SslStream(leaveInnerStreamOpen:false) disposes the inner stream too.
-            await ssl.DisposeAsync().ConfigureAwait(false);
+            await layered.DisposeAsync().ConfigureAwait(false);
             throw;
         }
     }
 
-    private void EnsureSupported()
+    private TransportKind EnsureSupported()
     {
-        if (!Options.IsRawTcp)
+        TransportKind transport = Options.TransportKind;
+        if (transport == TransportKind.Unsupported)
             throw new NotSupportedException(
-                $"Trojan transport '{Options.Transport}' is not supported; only 'tcp'/'raw' is implemented.");
+                $"Trojan transport '{Options.Transport}' is not supported; 'tcp'/'raw', 'ws' and " +
+                "'httpupgrade' are implemented.");
+
+        return transport;
     }
 
     private SslClientAuthenticationOptions BuildSslOptions() => new()
     {
-        TargetHost = Options.Sni ?? Options.Host,
+        // Same precedence Xray applies: explicit SNI, else the transport Host header, else the
+        // server address. A ws+tls node commonly sets only 'host'.
+        TargetHost = Options.Sni ?? Options.HostHeader ?? Options.Host,
         EnabledSslProtocols = SslProtocols,
         RemoteCertificateValidationCallback = Options.AllowInsecure
             ? static (_, _, _, _) => true

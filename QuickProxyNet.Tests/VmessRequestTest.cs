@@ -178,13 +178,35 @@ public class VmessRequestTest
     }
 
     [Fact]
-    public void CmdKey_InvalidUuid_Throws()
+    public void CmdKey_UnusableUuid_Throws()
     {
+        // 31 characters: too long for Xray's derivation window (1..30), too short to be a
+        // canonical UUID (32..36). Upstream errors here, so must we.
         Assert.Throws<FormatException>(() =>
         {
             Span<byte> dst = stackalloc byte[16];
-            VmessCmdKey.Derive("not-a-uuid", dst);
+            VmessCmdKey.Derive(new string('x', 31), dst);
         });
+
+        Assert.Throws<FormatException>(() =>
+        {
+            Span<byte> dst = stackalloc byte[16];
+            VmessCmdKey.Derive("", dst);
+        });
+    }
+
+    [Fact]
+    public void CmdKey_ShortNonUuidId_UsesDerivedUuid()
+    {
+        // A short non-UUID id is not an error: it is mapped to UUIDv5(nil, id), so the
+        // cmdKey must equal the one derived from that UUID's canonical spelling.
+        Span<byte> fromText = stackalloc byte[16];
+        VmessCmdKey.Derive("not-a-uuid", fromText);
+
+        Span<byte> fromDerivedUuid = stackalloc byte[16];
+        VmessCmdKey.Derive("9b70e619-d7b3-55b1-b743-756ebd573b4e", fromDerivedUuid);
+
+        Assert.Equal(fromDerivedUuid.ToArray(), fromText.ToArray());
     }
 
     // ========================= §3 AuthID =========================

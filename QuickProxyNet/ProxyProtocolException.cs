@@ -54,5 +54,10 @@ public enum ProxyErrorCode
     /// <summary>The proxy connection timed out.</summary>
     Timeout,
     /// <summary>A protocol string field (e.g. a target host name) exceeded the 255-byte limit.</summary>
-    StringTooLong
+    StringTooLong,
+    /// <summary>
+    /// The HTTP upgrade to an alternate transport (<c>ws</c>, <c>httpupgrade</c>) failed — the
+    /// server refused it, or answered something that is not a WebSocket handshake.
+    /// </summary>
+    TransportUpgradeFailed
 }

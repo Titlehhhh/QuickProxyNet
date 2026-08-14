@@ -24,17 +24,89 @@ public class VlessTest
     }
 
     [Fact]
-    public void UuidCodec_RejectsGarbage()
-    {
-        Span<byte> dest = stackalloc byte[16];
-        Assert.False(UuidCodec.TryWriteBigEndian("not-a-uuid", dest));
-    }
-
-    [Fact]
     public void UuidCodec_RejectsSmallDestination()
     {
         Span<byte> dest = stackalloc byte[8];
         Assert.False(UuidCodec.TryWriteBigEndian(Uuid, dest));
+    }
+
+    // === Non-UUID ids ===
+    //
+    // Xray's common/uuid.ParseString does NOT reject a short non-UUID id: for length 1..30
+    // it derives UUIDv5(nil-namespace, utf8(id)). Both endpoints derive the same value, so
+    // such ids work end to end and ~0.3% of real-world VLESS links use one.
+    //
+    // The vectors below come from an independent UUIDv5 implementation that was first
+    // validated against the published RFC 4122 vector
+    // uuid5(NAMESPACE_DNS, "python.org") == 886313e1-3b8a-5372-9b90-0c9aee199e5d.
+    // DockerProtocolTests.Vless_NonUuidId_DerivesSameIdAsXray proves it against real Xray.
+
+    [Theory]
+    [InlineData("not-a-uuid", "9b70e619-d7b3-55b1-b743-756ebd573b4e")]
+    [InlineData("a", "35b65f33-a679-5e76-af3c-273ea349ede4")]
+    [InlineData("password", "750db9b2-386a-5d2f-a2ea-64504781c566")]
+    [InlineData("MyUser123", "dec19763-791a-5f34-9a6b-a09c0630022c")]
+    public void UuidCodec_DerivesUuidV5_ForShortNonUuidId(string id, string expected)
+    {
+        Span<byte> dest = stackalloc byte[16];
+        Assert.True(UuidCodec.TryWriteBigEndian(id, dest));
+
+        // The derived value is a canonical UUIDv5: version nibble 5, RFC 4122 variant.
+        Assert.Equal(0x50, dest[6] & 0xF0);
+        Assert.Equal(0x80, dest[8] & 0xC0);
+
+        Span<byte> expectedBytes = stackalloc byte[16];
+        Guid.Parse(expected).TryWriteBytes(expectedBytes, bigEndian: true, out _);
+        Assert.Equal(expectedBytes.ToArray(), dest.ToArray());
+    }
+
+    [Fact]
+    public void UuidCodec_Derivation_IsDeterministic()
+    {
+        Span<byte> a = stackalloc byte[16];
+        Span<byte> b = stackalloc byte[16];
+        Assert.True(UuidCodec.TryWriteBigEndian("stable-id", a));
+        Assert.True(UuidCodec.TryWriteBigEndian("stable-id", b));
+        Assert.Equal(a.ToArray(), b.ToArray());
+    }
+
+    [Theory]
+    [InlineData(0)]   // empty: upstream errors
+    [InlineData(31)]  // too long to derive, too short to be canonical: upstream errors
+    [InlineData(37)]  // longer than any canonical form: upstream errors
+    [InlineData(40)]
+    public void UuidCodec_RejectsLengthsUpstreamRejects(int length)
+    {
+        Span<byte> dest = stackalloc byte[16];
+        Assert.False(UuidCodec.TryWriteBigEndian(new string('x', length), dest));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(30)]  // longest id upstream will derive from
+    public void UuidCodec_AcceptsDerivableLengths(int length)
+    {
+        Span<byte> dest = stackalloc byte[16];
+        Assert.True(UuidCodec.TryWriteBigEndian(new string('x', length), dest));
+    }
+
+    [Fact]
+    public void UuidCodec_Rejects32To36CharsThatAreNotHex()
+    {
+        // Inside the canonical length window there is no derivation fallback: upstream
+        // parses these as hex and fails, and so must we.
+        Span<byte> dest = stackalloc byte[16];
+        Assert.False(UuidCodec.TryWriteBigEndian(new string('z', 32), dest));
+        Assert.False(UuidCodec.TryWriteBigEndian(new string('z', 36), dest));
+    }
+
+    [Fact]
+    public void UuidCodec_CanonicalUuid_IsNotDerived()
+    {
+        // A real UUID must still round-trip to its own bytes, not to a hash of its text.
+        Span<byte> dest = stackalloc byte[16];
+        Assert.True(UuidCodec.TryWriteBigEndian(Uuid, dest));
+        Assert.Equal(UuidBigEndian, dest.ToArray());
     }
 
     // === ProxyAddress (VLESS type codes: 01 IPv4, 02 domain, 03 IPv6) ===
@@ -102,7 +174,7 @@ public class VlessTest
         Assert.Equal("example.com", o.Host);
         Assert.Equal(443, o.Port);
         Assert.Equal(VlessSecurity.None, o.Security);
-        Assert.True(o.IsRawTcp);
+        Assert.Equal(TransportKind.RawTcp, o.TransportKind);
         Assert.Equal("node1", o.Remark);
     }
 
@@ -132,7 +204,6 @@ public class VlessTest
     [Theory]
     [InlineData("")]
     [InlineData("http://example.com:443")]
-    [InlineData("vless://not-a-uuid@example.com:443")]
     [InlineData("vless://@example.com:443")]
     public void TryParse_RejectsInvalid(string link)
     {
@@ -140,10 +211,65 @@ public class VlessTest
     }
 
     [Fact]
+    public void TryParse_ShortNonUuidId_IsAccepted_AndKeptVerbatim()
+    {
+        // Xray maps a 1..30 character id to UUIDv5(nil, id) rather than rejecting it.
+        // The options keep the id as written; the derivation happens at the wire encoder.
+        Assert.True(VlessShareLink.TryParse("vless://not-a-uuid@example.com:443", out var o));
+        Assert.Equal("not-a-uuid", o.Id);
+    }
+
+    [Fact]
+    public void TryParse_MalformedUri_ReportsTheRealProblem_NotTheScheme()
+    {
+        // Broken generators leave "&key=value" in the authority, before the first '?'.
+        // The old message blamed the scheme, which sends the reader hunting in the wrong
+        // place; 87 of 15031 real-world vless links hit exactly this path.
+        var ex = Assert.Throws<FormatException>(() =>
+            VlessShareLink.Parse("vless://11223344-5566-7788-99aa-bbccddeeff00@1.2.3.4:443&type=raw?type=tcp"));
+        Assert.Contains("not a well-formed URI", ex.Message);
+        Assert.DoesNotContain("must start with", ex.Message);
+    }
+
+    [Fact]
     public void Parse_UnknownSecurity_Rejected_NoSilentPlaintextDowngrade()
     {
         // A typo like security=tsl must NOT silently fall back to plaintext.
         Assert.False(VlessShareLink.TryParse($"vless://{Uuid}@example.com:443?security=tsl", out _));
+    }
+
+    // === HTML-escaped links (&amp; as the separator) ===
+    //
+    // 68 vless and 10 trojan links in a 17k real-world corpus are published HTML-escaped,
+    // 51 of them REALITY. Splitting on '&' leaves keys named "amp;security", "amp;flow".
+    // Treating those as unknown keys is NOT harmless: the node then looks like plain
+    // security=none with no flow, passes EnsureSupported, and the client connects in
+    // cleartext — sending the UUID unencrypted to a REALITY server.
+
+    [Fact]
+    public void Parse_HtmlEscapedSeparators_DoNotSilentlyDowngradeRealityToPlaintext()
+    {
+        var o = VlessShareLink.Parse(
+            $"vless://{Uuid}@example.com:443?type=tcp&amp;security=reality&amp;pbk=PUBKEY" +
+            "&amp;sid=ab12&amp;flow=xtls-rprx-vision");
+
+        Assert.Equal(VlessSecurity.Reality, o.Security);
+        Assert.Equal("PUBKEY", o.RealityPublicKey);
+        Assert.Equal("ab12", o.RealityShortId);
+        Assert.Equal("xtls-rprx-vision", o.Flow);
+
+        // And the client must refuse it loudly rather than connecting in the clear.
+        Assert.Throws<NotSupportedException>(() => new VlessClient(o).ConnectAsync(
+            new MemoryStream(), "example.com", 443).AsTask().GetAwaiter().GetResult());
+    }
+
+    [Fact]
+    public void Parse_HtmlEscapedSeparators_TlsIsNotLostEither()
+    {
+        var o = VlessShareLink.Parse(
+            $"vless://{Uuid}@example.com:443?type=tcp&amp;security=tls&amp;sni=cdn.example.com");
+        Assert.Equal(VlessSecurity.Tls, o.Security);
+        Assert.Equal("cdn.example.com", o.Sni);
     }
 
     [Fact]
@@ -171,11 +297,33 @@ public class VlessTest
     }
 
     [Fact]
-    public void Client_InvalidUuid_ThrowsAtConstruction()
+    public void Client_UnusableUuid_ThrowsAtConstruction()
     {
-        var bad = new VlessOptions { Id = "not-a-uuid", Host = "example.com", Port = 443 };
+        // 31 chars: outside Xray's 1..30 derivation window and not a canonical UUID.
+        var bad = new VlessOptions { Id = new string('x', 31), Host = "example.com", Port = 443 };
         Assert.Throws<ArgumentException>(() => new VlessClient(bad));
     }
+
+    [Fact]
+    public void Client_ShortNonUuidId_ConstructsWithoutThrowing()
+    {
+        // The client must accept exactly what the share-link parser accepts; validating
+        // with Guid.TryParse here would reject links that parsed fine a moment earlier.
+        var o = new VlessOptions { Id = "not-a-uuid", Host = "example.com", Port = 443 };
+        var client = new VlessClient(o);
+        Assert.Equal("example.com", client.ProxyHost);
+    }
+
+    // === VlessClient response header (via FakeProxyStream) ===
+    //
+    // The response header is validated on the FIRST READ, not inside ConnectAsync. Neither
+    // Xray nor sing-box flushes `ver + addonsLen` until the target has produced data, so an
+    // eager read deadlocks every client-speaks-first protocol (HTTP, TLS, Minecraft) — the
+    // same trap VmessResponseStream already documents. That was measured against both servers
+    // and is pinned end to end by DockerProtocolTests.
+    //
+    // The assertions below therefore drive a read; the exceptions and error codes they expect
+    // are unchanged.
 
     [Fact]
     public async Task Client_ServerClosesEarly_WrapsAsProxyProtocolException()
@@ -184,38 +332,51 @@ public class VlessTest
         var stream = new FakeProxyStream([0x00]);
         var client = new VlessClient(VlessShareLink.Parse($"vless://{Uuid}@example.com:443"));
 
+        var tunnel = await client.ConnectAsync(stream, "example.org", 443, CancellationToken.None);
+
         var ex = await Assert.ThrowsAsync<ProxyProtocolException>(
-            () => client.ConnectAsync(stream, "example.org", 443, CancellationToken.None).AsTask());
+            async () => Assert.Equal(0, await tunnel.ReadAsync(new byte[16])));
         Assert.Equal(ProxyErrorCode.ConnectionFailed, ex.ErrorCode);
     }
 
-    // === VlessClient (none path via FakeProxyStream) ===
-
     [Fact]
-    public async Task Client_None_WritesRequest_And_ReturnsStream()
+    public async Task Client_None_WritesRequest_AndDefersResponseHeader()
     {
-        // Server response: ver=00, addonsLen=00.
-        var stream = new FakeProxyStream([0x00, 0x00]);
+        // Server response: ver=00, addonsLen=00, then the target's payload.
+        var stream = new FakeProxyStream([0x00, 0x00, 0x41, 0x42]);
         var client = new VlessClient(VlessShareLink.Parse($"vless://{Uuid}@example.com:443?security=none"));
 
-        var result = await client.ConnectAsync(stream, "mc.example.com", 25565, CancellationToken.None);
+        var tunnel = await client.ConnectAsync(stream, "mc.example.com", 25565, CancellationToken.None);
 
-        Assert.Same(stream, result);
+        // The request must already be on the wire when ConnectAsync returns...
         var written = stream.WrittenBytes;
         Assert.Equal(0x00, written[0]);                        // version
-        Assert.Equal(UuidBigEndian, written[1..17]);          // uuid big-endian
+        Assert.Equal(UuidBigEndian, written[1..17]);           // uuid big-endian
         Assert.Equal(0x01, written[18]);                       // TCP command
+
+        // ...while the response header has not been touched yet.
+        Assert.NotSame(stream, tunnel);
+
+        // The first read consumes the header and hands back only the target's bytes.
+        var buffer = new byte[16];
+        int read = await tunnel.ReadAsync(buffer);
+        Assert.Equal(2, read);
+        Assert.Equal([0x41, 0x42], buffer[..read]);
     }
 
     [Fact]
     public async Task Client_None_DrainsAddons()
     {
-        // ver=00, addonsLen=03, then 3 addon bytes.
-        var stream = new FakeProxyStream([0x00, 0x03, 0xAA, 0xBB, 0xCC]);
+        // ver=00, addonsLen=03, then 3 addon bytes, then the target's payload.
+        var stream = new FakeProxyStream([0x00, 0x03, 0xAA, 0xBB, 0xCC, 0x5A]);
         var client = new VlessClient(VlessShareLink.Parse($"vless://{Uuid}@example.com:443"));
 
-        var result = await client.ConnectAsync(stream, "example.org", 443, CancellationToken.None);
-        Assert.Same(stream, result);
+        var tunnel = await client.ConnectAsync(stream, "example.org", 443, CancellationToken.None);
+
+        var buffer = new byte[16];
+        int read = await tunnel.ReadAsync(buffer);
+        Assert.Equal(1, read);
+        Assert.Equal(0x5A, buffer[0]);   // addons were drained, not returned as payload
     }
 
     [Fact]
@@ -224,9 +385,26 @@ public class VlessTest
         var stream = new FakeProxyStream([0x01, 0x00]); // wrong version
         var client = new VlessClient(VlessShareLink.Parse($"vless://{Uuid}@example.com:443"));
 
+        var tunnel = await client.ConnectAsync(stream, "example.org", 443, CancellationToken.None);
+
         var ex = await Assert.ThrowsAsync<ProxyProtocolException>(
-            () => client.ConnectAsync(stream, "example.org", 443, CancellationToken.None).AsTask());
+            async () => Assert.Equal(0, await tunnel.ReadAsync(new byte[16])));
         Assert.Equal(ProxyErrorCode.InvalidResponse, ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Client_None_DoesNotReadResponseHeaderDuringConnect()
+    {
+        // The regression guard for the deadlock: a server that sends NOTHING must still let
+        // ConnectAsync complete, because a real VLESS server sends nothing until the client's
+        // request has reached the target.
+        var stream = new FakeProxyStream([]);
+        var client = new VlessClient(VlessShareLink.Parse($"vless://{Uuid}@example.com:443?security=none"));
+
+        var tunnel = await client.ConnectAsync(stream, "example.org", 443, CancellationToken.None);
+
+        Assert.NotNull(tunnel);
+        Assert.NotEmpty(stream.WrittenBytes);
     }
 
     [Fact]
@@ -245,7 +423,7 @@ public class VlessTest
     {
         var stream = new FakeProxyStream([0x00, 0x00]);
         var client = new VlessClient(
-            VlessShareLink.Parse($"vless://{Uuid}@example.com:443?type=ws&security=none"));
+            VlessShareLink.Parse($"vless://{Uuid}@example.com:443?type=grpc&security=none"));
 
         await Assert.ThrowsAsync<NotSupportedException>(
             () => client.ConnectAsync(stream, "example.org", 443, CancellationToken.None).AsTask());

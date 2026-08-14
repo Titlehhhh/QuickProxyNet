@@ -38,8 +38,8 @@ public enum VmessSecurityKind
 /// deliberately not implemented, so it is rejected rather than silently downgraded.
 /// </para>
 /// <para>
-/// Only <c>tcp</c>/<c>raw</c> transport is supported at connect time in this release, with
-/// or without TLS. Other transports (<c>ws</c>, <c>grpc</c>, <c>h2</c>, …) are parsed so
+/// The <c>tcp</c>/<c>raw</c>, <c>ws</c> and <c>httpupgrade</c> transports are supported at
+/// connect time, with or without TLS. Others (<c>grpc</c>, <c>h2</c>, …) are parsed so
 /// callers can inspect them, but connecting with them throws
 /// <see cref="System.NotSupportedException"/>.
 /// </para>
@@ -67,8 +67,23 @@ public sealed class VmessOptions
     /// </summary>
     public int AlterId { get; init; }
 
-    /// <summary>Transport network: <c>tcp</c> or <c>raw</c> (both raw TCP). Others are unsupported.</summary>
+    /// <summary>
+    /// Transport network (the share-link <c>net</c> field): <c>tcp</c>/<c>raw</c> (raw TCP),
+    /// <c>ws</c>/<c>websocket</c>, or <c>httpupgrade</c>. Others are unsupported.
+    /// </summary>
     public string Transport { get; init; } = "tcp";
+
+    /// <summary>
+    /// Request path for the <c>ws</c>/<c>httpupgrade</c> transports (the share-link
+    /// <c>path</c> field). Defaults to <c>/</c>. Sent verbatim, including any query.
+    /// </summary>
+    public string? Path { get; init; }
+
+    /// <summary>
+    /// <c>Host</c> header for the <c>ws</c>/<c>httpupgrade</c> transports (the share-link
+    /// <c>host</c> field). Falls back to <see cref="Sni"/>, then to <see cref="Host"/>.
+    /// </summary>
+    public string? HostHeader { get; init; }
 
     /// <summary>
     /// When true the VMess session runs inside TLS (the share-link <c>tls</c> field).
@@ -90,10 +105,8 @@ public sealed class VmessOptions
     /// <summary>Human-readable label from the share-link <c>ps</c> field.</summary>
     public string? Remark { get; init; }
 
-    /// <summary>True when the transport is plain TCP (<c>tcp</c> or <c>raw</c>).</summary>
-    internal bool IsRawTcp =>
-        Transport.Equals("tcp", StringComparison.OrdinalIgnoreCase) ||
-        Transport.Equals("raw", StringComparison.OrdinalIgnoreCase);
+    /// <summary>The resolved transport layer this configuration selects.</summary>
+    internal TransportKind TransportKind => ProxyTransport.Resolve(Transport);
 
     /// <summary>
     /// Maps <see cref="Security"/> onto the concrete body cipher written into the request
