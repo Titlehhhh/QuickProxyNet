@@ -173,16 +173,22 @@ internal static class TlsClientHello
         int extension = writer.BeginVector16();
 
         int algorithms = writer.BeginVector16();
-        // ed25519 is not optional here: the certificate a REALITY server returns once it has
-        // authenticated the client is Ed25519, so omitting it would make the server unable to
-        // answer us at all.
-        writer.WriteUInt16(0x0807); // ed25519
+        // Chrome's list, in Chrome's order. Both matter: JA4 appends the signature algorithms
+        // unsorted, so a reordering changes the hash even though TLS does not care.
+        //
+        // ed25519 (0x0807) is deliberately absent, and it took an experiment to be sure. An
+        // earlier comment here claimed it was load-bearing, on the reasoning that a REALITY
+        // server answers with an Ed25519 certificate. It is not: the server generates that
+        // certificate only after it has authenticated the client, and never consults
+        // signature_algorithms for it. Removing it leaves the real-server handshake and tunnel
+        // tests green, and Chrome does not send it.
         writer.WriteUInt16(0x0403); // ecdsa_secp256r1_sha256
         writer.WriteUInt16(0x0804); // rsa_pss_rsae_sha256
-        writer.WriteUInt16(0x0805); // rsa_pss_rsae_sha384
-        writer.WriteUInt16(0x0806); // rsa_pss_rsae_sha512
         writer.WriteUInt16(0x0401); // rsa_pkcs1_sha256
+        writer.WriteUInt16(0x0503); // ecdsa_secp384r1_sha384
+        writer.WriteUInt16(0x0805); // rsa_pss_rsae_sha384
         writer.WriteUInt16(0x0501); // rsa_pkcs1_sha384
+        writer.WriteUInt16(0x0806); // rsa_pss_rsae_sha512
         writer.WriteUInt16(0x0601); // rsa_pkcs1_sha512
         writer.EndVector(algorithms, 2);
 
