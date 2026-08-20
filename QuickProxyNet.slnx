@@ -5,5 +5,6 @@
   <Project Path="QuickProxyNet.Benchmarks/QuickProxyNet.Benchmarks.csproj" />
   <Project Path="QuickProxyNet.Tests/QuickProxyNet.Tests.csproj" />
   <Project Path="QuickProxyNet/QuickProxyNet.csproj" />
+  <Project Path="QuickProxyNet.Reality/QuickProxyNet.Reality.csproj" />
   <Project Path="Sample/Sample.csproj" />
 </Solution>
