@@ -20,8 +20,16 @@ internal sealed class RealityTlsStream : Stream
     private readonly Stream _transport;
     private readonly TlsRecordStream _records;
 
-    private byte[] _pending;
-    private int _pendingOffset;
+    /// <summary>
+    /// What is left of the last record read, as a slice of the record layer's own buffer.
+    /// </summary>
+    /// <remarks>
+    /// Not a copy. <see cref="TlsRecordStream.Record"/> promises its payload stays valid until
+    /// the next read, and the read loop only reads again once this is
+    /// empty — so the lifetime already lines up exactly, and copying each record cost a full
+    /// memcpy of the payload for nothing.
+    /// </remarks>
+    private ReadOnlyMemory<byte> _pending;
     private bool _receivedCloseNotify;
     private bool _disposed;
 
@@ -29,7 +37,10 @@ internal sealed class RealityTlsStream : Stream
     {
         _transport = transport;
         _records = records;
-        _pending = leftover.Count > 0 ? leftover.ToArray() : [];
+
+        // The one case that must be copied: the leftover comes from the handshake reader's list,
+        // which does not survive.
+        _pending = leftover.Count > 0 ? leftover.ToArray() : ReadOnlyMemory<byte>.Empty;
     }
 
     public override bool CanRead => !_disposed;
@@ -50,7 +61,7 @@ internal sealed class RealityTlsStream : Stream
         if (buffer.IsEmpty)
             return 0;
 
-        while (_pendingOffset >= _pending.Length)
+        while (_pending.IsEmpty)
         {
             if (_receivedCloseNotify)
                 return 0;
@@ -59,9 +70,9 @@ internal sealed class RealityTlsStream : Stream
                 return 0;
         }
 
-        int count = Math.Min(buffer.Length, _pending.Length - _pendingOffset);
-        _pending.AsSpan(_pendingOffset, count).CopyTo(buffer.Span);
-        _pendingOffset += count;
+        int count = Math.Min(buffer.Length, _pending.Length);
+        _pending.Span[..count].CopyTo(buffer.Span);
+        _pending = _pending[count..];
 
         return count;
     }
@@ -87,8 +98,7 @@ internal sealed class RealityTlsStream : Stream
             switch (record.Type)
             {
                 case TlsContentType.ApplicationData when !record.Payload.IsEmpty:
-                    _pending = record.Payload.ToArray();
-                    _pendingOffset = 0;
+                    _pending = record.Payload;
                     return true;
 
                 case TlsContentType.ApplicationData:
@@ -177,6 +187,10 @@ internal sealed class RealityTlsStream : Stream
 
         _disposed = true;
 
+        // Dropped before the record layer returns its buffers to the pool: this aliases one of
+        // them, and a slice outliving its array is how a pooled buffer ends up shared.
+        _pending = ReadOnlyMemory<byte>.Empty;
+
         if (disposing)
         {
             _records.Dispose();
@@ -192,6 +206,7 @@ internal sealed class RealityTlsStream : Stream
             return;
 
         _disposed = true;
+        _pending = ReadOnlyMemory<byte>.Empty;
         _records.Dispose();
         await _transport.DisposeAsync().ConfigureAwait(false);
 

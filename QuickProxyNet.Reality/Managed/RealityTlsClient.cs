@@ -145,9 +145,9 @@ internal sealed class RealityTlsClient
 
                 // ---- Server flight ----
                 byte[]? leafCertificate = null;
-                byte[]? serverVerifyData = null;
+                bool serverFinished = false;
 
-                while (serverVerifyData is null)
+                while (!serverFinished)
                 {
                     HandshakeMessage message = await messages.NextAsync(cancellationToken).ConfigureAwait(false);
 
@@ -165,8 +165,9 @@ internal sealed class RealityTlsClient
 
                         case TlsHandshakeType.Finished:
                             // Verified against the transcript as it stood *before* this message.
-                            serverVerifyData = VerifyServerFinished(
+                            VerifyServerFinished(
                                 parsed.Suite, serverHandshakeTraffic, transcript.GetCurrentHash(), message.Body.Span);
+                            serverFinished = true;
                             transcript.AppendData(message.Raw);
                             break;
 
@@ -289,7 +290,7 @@ internal sealed class RealityTlsClient
             SHA256.HashData(ReadOnlySpan<byte>.Empty, output);
     }
 
-    private static byte[] VerifyServerFinished(
+    private static void VerifyServerFinished(
         TlsCipherSuite suite, ReadOnlySpan<byte> serverTraffic, ReadOnlySpan<byte> transcriptHash, ReadOnlySpan<byte> body)
     {
         Span<byte> expected = stackalloc byte[suite.HashLength];
@@ -299,8 +300,6 @@ internal sealed class RealityTlsClient
             throw new RealityHandshakeException(
                 "The server's Finished did not verify. The peer does not hold the private key for the " +
                 "key_share it sent, so the connection is not with the server we negotiated with.");
-
-        return body.ToArray();
     }
 
     private static byte[] BuildFinished(

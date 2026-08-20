@@ -58,7 +58,9 @@ internal static class TlsClientHello
         byte[] publicKey = new byte[X25519.KeySize];
         X25519.GenerateKeyPair(privateKey, publicKey);
 
-        var writer = new TlsWriter();
+        // A hello lands around 300-600 bytes; sizing for it avoids the one resize the default
+        // 512-byte buffer would always need.
+        var writer = new TlsWriter(1024);
 
         writer.WriteByte(1); // handshake type: client_hello
         int body = writer.BeginVector24();

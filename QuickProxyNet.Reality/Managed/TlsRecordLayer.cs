@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 
 namespace QuickProxyNet.Reality.Managed;
@@ -162,8 +163,17 @@ internal sealed class TlsRecordStream(Stream transport) : IDisposable
     public const int MaxCiphertext = MaxPlaintext + 256;
 
     private readonly byte[] _header = new byte[5];
-    private readonly byte[] _body = new byte[MaxCiphertext];
-    private readonly byte[] _plaintext = new byte[MaxCiphertext];
+    private readonly byte[] _body = ArrayPool<byte>.Shared.Rent(MaxCiphertext);
+    private readonly byte[] _plaintext = ArrayPool<byte>.Shared.Rent(MaxCiphertext);
+
+    /// <summary>The record being written: header, ciphertext and tag, contiguous for one write.</summary>
+    private readonly byte[] _outbound =
+        ArrayPool<byte>.Shared.Rent(5 + MaxPlaintext + 1 + TlsCipherSuite.TagLength);
+
+    /// <summary>The inner plaintext being staged: the payload plus its content-type byte.</summary>
+    private readonly byte[] _outboundPlain = ArrayPool<byte>.Shared.Rent(MaxPlaintext + 1);
+
+    private bool _disposed;
 
     /// <summary>Protection for outgoing records, or null while still in the clear.</summary>
     public TlsRecordProtection? Write { get; set; }
@@ -207,9 +217,10 @@ internal sealed class TlsRecordStream(Stream transport) : IDisposable
             _header);
 
         // The real content type is the last non-zero byte: TLS 1.3 hides it behind zero padding.
-        int end = contentLength;
-        while (end > 0 && _plaintext[end - 1] == 0)
-            end--;
+        // LastIndexOfAnyExcept is vectorised in the BCL; the byte loop it replaces was O(padding),
+        // which a peer could make 16 KiB long. Returns -1 for an all-zero record, so the
+        // no-content-type case below is reached identically.
+        int end = _plaintext.AsSpan(0, contentLength).LastIndexOfAnyExcept((byte)0) + 1;
 
         if (end == 0)
             throw new InvalidOperationException("The peer sent a record with no content type.");
@@ -221,20 +232,33 @@ internal sealed class TlsRecordStream(Stream transport) : IDisposable
     /// <param name="type">The content type.</param>
     /// <param name="payload">The content.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
+    /// <remarks>
+    /// Not reentrant: one record is staged in shared buffers, and the protection's sequence
+    /// number advances per call. Two concurrent writers already produced records the peer could
+    /// not order, so this narrows an existing hazard rather than adding one — but it is worth
+    /// stating, because the symptom changes from a bad sequence number to interleaved plaintext.
+    /// </remarks>
     public async ValueTask WriteAsync(
         TlsContentType type, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
+        // The staging buffers hold exactly one record. A larger payload would silently truncate
+        // the length field, so it is refused rather than corrected.
+        if (payload.Length > MaxPlaintext)
+            throw new ArgumentOutOfRangeException(
+                nameof(payload), payload.Length, $"A TLS record carries at most {MaxPlaintext} bytes.");
+
         if (Write is null)
         {
-            byte[] plain = new byte[5 + payload.Length];
+            Span<byte> plain = _outbound.AsSpan(0, 5 + payload.Length);
             plain[0] = (byte)type;
             plain[1] = 3;
             plain[2] = payload.Length > 0 && type == TlsContentType.Handshake ? (byte)1 : (byte)3;
             plain[3] = (byte)(payload.Length >> 8);
             plain[4] = (byte)payload.Length;
-            payload.Span.CopyTo(plain.AsSpan(5));
+            payload.Span.CopyTo(plain[5..]);
 
-            await transport.WriteAsync(plain, cancellationToken).ConfigureAwait(false);
+            await transport.WriteAsync(_outbound.AsMemory(0, 5 + payload.Length), cancellationToken)
+                .ConfigureAwait(false);
             await transport.FlushAsync(cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -242,37 +266,50 @@ internal sealed class TlsRecordStream(Stream transport) : IDisposable
         // An encrypted record always announces itself as application_data; the real type rides
         // inside, after the content.
         int inner = payload.Length + 1;
-        byte[] record = new byte[5 + inner + TlsCipherSuite.TagLength];
-        record[0] = (byte)TlsContentType.ApplicationData;
-        record[1] = 3;
-        record[2] = 3;
-        record[3] = (byte)((inner + TlsCipherSuite.TagLength) >> 8);
-        record[4] = (byte)(inner + TlsCipherSuite.TagLength);
+        _outbound[0] = (byte)TlsContentType.ApplicationData;
+        _outbound[1] = 3;
+        _outbound[2] = 3;
+        _outbound[3] = (byte)((inner + TlsCipherSuite.TagLength) >> 8);
+        _outbound[4] = (byte)(inner + TlsCipherSuite.TagLength);
 
-        byte[] scratch = new byte[inner];
-        try
-        {
-            payload.Span.CopyTo(scratch);
-            scratch[payload.Length] = (byte)type;
+        // Staged in a second buffer rather than encrypted in place: .NET does not document
+        // whether an AEAD may overlap its input and output, and the record layer is the wrong
+        // place to discover the answer.
+        payload.Span.CopyTo(_outboundPlain);
+        _outboundPlain[payload.Length] = (byte)type;
 
-            Write.Protect(
-                scratch,
-                record.AsSpan(5, inner),
-                record.AsSpan(5 + inner, TlsCipherSuite.TagLength),
-                record.AsSpan(0, 5));
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(scratch);
-        }
+        Write.Protect(
+            _outboundPlain.AsSpan(0, inner),
+            _outbound.AsSpan(5, inner),
+            _outbound.AsSpan(5 + inner, TlsCipherSuite.TagLength),
+            _outbound.AsSpan(0, 5));
 
-        await transport.WriteAsync(record, cancellationToken).ConfigureAwait(false);
+        await transport
+            .WriteAsync(_outbound.AsMemory(0, 5 + inner + TlsCipherSuite.TagLength), cancellationToken)
+            .ConfigureAwait(false);
         await transport.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Releases the pooled buffers and the AEAD instances.</summary>
+    /// <remarks>
+    /// The guard is load-bearing now that the buffers are rented: this type is disposed twice on
+    /// the failure path — once by the handshake's catch, once by the stream that wraps it — and
+    /// returning the same array to the pool twice would hand one connection's buffer to another.
+    /// </remarks>
     public void Dispose()
     {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+
         Read?.Dispose();
         Write?.Dispose();
+
+        // Cleared on return: these held decrypted application data.
+        ArrayPool<byte>.Shared.Return(_plaintext, clearArray: true);
+        ArrayPool<byte>.Shared.Return(_outboundPlain, clearArray: true);
+        ArrayPool<byte>.Shared.Return(_body, clearArray: true);
+        ArrayPool<byte>.Shared.Return(_outbound, clearArray: true);
     }
 }
