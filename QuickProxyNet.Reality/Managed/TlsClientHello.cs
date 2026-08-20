@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -76,7 +77,13 @@ internal static class TlsClientHello
         int cipherSuites = writer.BeginVector16();
         writer.WriteUInt16(0x1301); // TLS_AES_128_GCM_SHA256
         writer.WriteUInt16(0x1302); // TLS_AES_256_GCM_SHA384
-        writer.WriteUInt16(0x1303); // TLS_CHACHA20_POLY1305_SHA256
+
+        // Offered only where the platform can actually do it. Advertising a suite the record
+        // layer cannot build means a server may select it and the connection then fails with
+        // "the server chose a suite we did not offer", which is both wrong and unhelpful.
+        if (ChaCha20Poly1305.IsSupported)
+            writer.WriteUInt16(0x1303); // TLS_CHACHA20_POLY1305_SHA256
+
         writer.EndVector(cipherSuites, 2);
 
         int compression = writer.BeginVector8();
@@ -109,11 +116,41 @@ internal static class TlsClientHello
         int list = writer.BeginVector16();
         writer.WriteByte(0); // host_name
         int name = writer.BeginVector16();
-        writer.Write(Encoding.ASCII.GetBytes(serverName));
+        writer.Write(Encoding.ASCII.GetBytes(ToALabel(serverName)));
         writer.EndVector(name, 2);
         writer.EndVector(list, 2);
 
         writer.EndVector(extension, 2);
+    }
+
+    /// <summary>
+    /// Converts a host name to the ASCII form SNI requires (RFC 6066: A-labels only).
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Encoding.ASCII"/> maps anything outside ASCII to <c>?</c>, so encoding an
+    /// internationalised name directly would put a host nobody owns into the ClientHello and
+    /// send it without a word. Punycode is the specified answer, and a name that cannot be
+    /// converted is an error rather than something to approximate.
+    /// </remarks>
+    private static string ToALabel(string serverName)
+    {
+        foreach (char c in serverName)
+        {
+            if (c > 127)
+            {
+                try
+                {
+                    return new IdnMapping().GetAscii(serverName);
+                }
+                catch (ArgumentException ex)
+                {
+                    throw new ArgumentException(
+                        $"'{serverName}' is not a host name that can be encoded for SNI.", nameof(serverName), ex);
+                }
+            }
+        }
+
+        return serverName;
     }
 
     private static void WriteSupportedGroups(TlsWriter writer)

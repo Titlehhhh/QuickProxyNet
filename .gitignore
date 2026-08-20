@@ -366,3 +366,6 @@ FodyWeavers.xsd
 
 # Local agent tooling session state
 .omc/
+
+# Isolated git worktrees created for background agents.
+.claude/worktrees/

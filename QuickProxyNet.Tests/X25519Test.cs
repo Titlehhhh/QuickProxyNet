@@ -127,6 +127,81 @@ public class X25519Test
         Assert.Throws<CryptographicException>(() => X25519.Agree(shared, privateKey, Hex(peerPublicKey)));
     }
 
+    /// <summary>2^255 - 19, the field the limbs represent residues in.</summary>
+    private static readonly System.Numerics.BigInteger Prime =
+        (System.Numerics.BigInteger.One << 255) - 19;
+
+    private static System.Numerics.BigInteger ToInteger(ReadOnlySpan<ulong> limbs)
+    {
+        System.Numerics.BigInteger value = 0;
+        for (int i = limbs.Length - 1; i >= 0; i--)
+            value = (value << 51) + limbs[i];
+
+        return value % Prime;
+    }
+
+    /// <summary>
+    /// Field multiplication against arbitrary-precision arithmetic, on limb patterns chosen to
+    /// stress the carry chain.
+    /// </summary>
+    /// <remarks>
+    /// The scalar-multiplication vectors above exercise the field ops only through whatever limb
+    /// values the ladder happens to produce. A dropped carry mask is wrong by exactly one limb
+    /// weight and fires for a vanishing fraction of inputs, so it can hide behind every RFC
+    /// vector and every random handshake while still breaking one connection in a billion. These
+    /// compare the arithmetic directly, with the maximum limb values deliberately included.
+    /// </remarks>
+    [Fact]
+    public void Multiply_MatchesArbitraryPrecision()
+    {
+        const ulong mask51 = (1UL << 51) - 1;
+
+        ulong[][] adversarial =
+        [
+            [mask51, mask51, mask51, mask51, mask51],
+            [mask51, 0, 0, 0, 0],
+            [0, 0, 0, 0, mask51],
+            [1, 0, 0, 0, 0],
+            [(1UL << 52) - 1, (1UL << 52) - 1, (1UL << 52) - 1, (1UL << 52) - 1, (1UL << 52) - 1],
+            [mask51 - 1, 1, mask51, 2, mask51]
+        ];
+
+        var random = new Random(20260820);
+        var cases = new List<ulong[]>(adversarial);
+        for (int i = 0; i < 200; i++)
+        {
+            cases.Add(
+            [
+                (ulong)random.NextInt64(0, 1L << 52),
+                (ulong)random.NextInt64(0, 1L << 52),
+                (ulong)random.NextInt64(0, 1L << 52),
+                (ulong)random.NextInt64(0, 1L << 52),
+                (ulong)random.NextInt64(0, 1L << 52)
+            ]);
+        }
+
+        ulong[] result = new ulong[5];
+
+        foreach (ulong[] left in cases)
+        {
+            foreach (ulong[] right in cases)
+            {
+                X25519.MultiplyForTests(result, left, right);
+
+                Assert.Equal(
+                    ToInteger(left) * ToInteger(right) % Prime,
+                    ToInteger(result));
+            }
+
+            // 121665 is the only scalar the ladder ever passes to MulSmall.
+            X25519.MulSmall(result, left, 121665);
+
+            Assert.Equal(
+                ToInteger(left) * 121665 % Prime,
+                ToInteger(result));
+        }
+    }
+
     [Fact]
     public void Clamp_MatchesRfc7748()
     {

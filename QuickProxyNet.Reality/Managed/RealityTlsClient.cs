@@ -83,11 +83,12 @@ internal sealed class RealityTlsClient
 
         var records = new TlsRecordStream(transport);
         byte[] authKey = new byte[RealityAuth.AuthKeySize];
+        TlsClientHello.Result hello = default;
 
         try
         {
             // ---- ClientHello, with the REALITY blob sealed into its session id ----
-            TlsClientHello.Result hello = TlsClientHello.Build(options.ServerName, options.Alpn);
+            hello = TlsClientHello.Build(options.ServerName, options.Alpn);
 
             RealityAuth.DeriveAuthKey(authKey, hello.PrivateKey, options.PublicKey, hello.Handshake.AsSpan(6, 32));
 
@@ -109,7 +110,15 @@ internal sealed class RealityTlsClient
             if (serverHello.Type != TlsHandshakeType.ServerHello)
                 throw new RealityHandshakeException($"Expected a ServerHello, got {serverHello.Type}.");
 
-            ServerHello parsed = ParseServerHello(serverHello.Raw);
+            ServerHello parsed = ParseServerHello(serverHello.Raw, hello.Handshake);
+
+            // Everything after the ServerHello is encrypted, so a plaintext handshake byte still
+            // buffered here was never authenticated — it came from somebody on the path, not from
+            // the server. It would otherwise be handed out later as if it had been decrypted.
+            if (messages.HasBufferedBytes)
+                throw new RealityHandshakeException(
+                    "The peer sent unencrypted handshake bytes after its ServerHello. They cannot be " +
+                    "authenticated, so the connection is refused.");
 
             // The transcript hash cannot start until the suite names its hash, so the hello bytes
             // are replayed into it here rather than fed as they were sent.
@@ -232,6 +241,12 @@ internal sealed class RealityTlsClient
         finally
         {
             CryptographicOperations.ZeroMemory(authKey);
+
+            // The ephemeral scalar is the value the whole session can be recomputed from — every
+            // other secret here is already cleared, and leaving this one on the heap would make
+            // that discipline pointless.
+            if (hello.PrivateKey is not null)
+                CryptographicOperations.ZeroMemory(hello.PrivateKey);
         }
     }
 
@@ -364,43 +379,61 @@ internal sealed class RealityTlsClient
 
     private readonly record struct ServerHello(TlsCipherSuite Suite, byte[] KeyShare);
 
-    private static ServerHello ParseServerHello(byte[] raw)
+    /// <summary>
+    /// Parses a ServerHello, checking every length before it is used.
+    /// </summary>
+    /// <param name="raw">The ServerHello handshake message.</param>
+    /// <param name="clientHello">
+    /// Our own hello, for the <c>legacy_session_id_echo</c> comparison RFC 8446 §4.1.3 requires.
+    /// </param>
+    /// <remarks>
+    /// Every malformed input has to leave as a <see cref="RealityHandshakeException"/> naming what
+    /// was wrong. A raw <see cref="IndexOutOfRangeException"/> escaping from here would still fail
+    /// closed, but it would tell whoever is debugging nothing at all about the peer.
+    /// </remarks>
+    private static ServerHello ParseServerHello(byte[] raw, ReadOnlySpan<byte> clientHello)
     {
         ReadOnlySpan<byte> body = raw.AsSpan(4);
 
-        if (body.Length < 34)
-            throw new RealityHandshakeException("The ServerHello is truncated.");
-
-        ReadOnlySpan<byte> random = body.Slice(2, 32);
+        ReadOnlySpan<byte> random = Take(ref body, 34, "the version and random")[2..];
         if (random.SequenceEqual(HelloRetryRequestRandom))
             throw new RealityHandshakeException(
                 "The server sent a HelloRetryRequest, which this client does not implement. It means the " +
                 "server rejected the offered X25519 group.");
 
-        int offset = 34;
-        int sessionIdLength = body[offset++];
-        offset += sessionIdLength;
+        int sessionIdLength = Take(ref body, 1, "the session id length")[0];
+        ReadOnlySpan<byte> sessionIdEcho = Take(ref body, sessionIdLength, "the session id");
 
-        ushort suiteId = BinaryPrimitives.ReadUInt16BigEndian(body[offset..]);
-        offset += 2;
-        offset += 1; // legacy_compression_method
+        // RFC 8446 §4.1.3: the client MUST verify the echo. For REALITY it is more than a
+        // formality — the session id is where our sealed authentication blob lives, so a
+        // mismatch means the hello that reached the server was not the one we sent.
+        ReadOnlySpan<byte> sessionIdSent =
+            clientHello.Slice(RealityAuth.SessionIdOffset, RealityAuth.SessionIdSize);
+
+        if (!sessionIdEcho.SequenceEqual(sessionIdSent))
+            throw new RealityHandshakeException(
+                "The server echoed a different session id than we sent. The ClientHello was altered in " +
+                "flight, or the answer came from somewhere else.");
+
+        ushort suiteId = BinaryPrimitives.ReadUInt16BigEndian(Take(ref body, 2, "the cipher suite"));
+
+        if (Take(ref body, 1, "the compression method")[0] != 0)
+            throw new RealityHandshakeException("The server selected a compression method; TLS 1.3 has none.");
 
         TlsCipherSuite suite = TlsCipherSuite.FromId(suiteId)
             ?? throw new RealityHandshakeException($"The server chose cipher suite 0x{suiteId:X4}, which we did not offer.");
 
-        int extensionsLength = BinaryPrimitives.ReadUInt16BigEndian(body[offset..]);
-        offset += 2;
-        ReadOnlySpan<byte> extensions = body.Slice(offset, extensionsLength);
+        int extensionsLength = BinaryPrimitives.ReadUInt16BigEndian(Take(ref body, 2, "the extensions length"));
+        ReadOnlySpan<byte> extensions = Take(ref body, extensionsLength, "the extensions");
 
         byte[]? keyShare = null;
         bool sawTls13 = false;
 
-        while (extensions.Length >= 4)
+        while (!extensions.IsEmpty)
         {
-            ushort type = BinaryPrimitives.ReadUInt16BigEndian(extensions);
-            int length = BinaryPrimitives.ReadUInt16BigEndian(extensions[2..]);
-            ReadOnlySpan<byte> data = extensions.Slice(4, length);
-            extensions = extensions[(4 + length)..];
+            ushort type = BinaryPrimitives.ReadUInt16BigEndian(Take(ref extensions, 2, "an extension type"));
+            int length = BinaryPrimitives.ReadUInt16BigEndian(Take(ref extensions, 2, "an extension length"));
+            ReadOnlySpan<byte> data = Take(ref extensions, length, $"extension {type}");
 
             switch (type)
             {
@@ -411,7 +444,7 @@ internal sealed class RealityTlsClient
                 case 51 when data.Length >= 4:
                     ushort group = BinaryPrimitives.ReadUInt16BigEndian(data);
                     int shareLength = BinaryPrimitives.ReadUInt16BigEndian(data[2..]);
-                    if (group == 0x001D && shareLength == X25519.KeySize)
+                    if (group == 0x001D && shareLength == X25519.KeySize && data.Length >= 4 + shareLength)
                         keyShare = data.Slice(4, shareLength).ToArray();
                     break;
             }
@@ -427,25 +460,44 @@ internal sealed class RealityTlsClient
         return new ServerHello(suite, keyShare);
     }
 
+    /// <summary>
+    /// Consumes <paramref name="count"/> bytes from the front of <paramref name="source"/>,
+    /// failing with a description rather than an index-out-of-range.
+    /// </summary>
+    /// <param name="source">The span to advance; on return it starts past the taken bytes.</param>
+    /// <param name="count">How many bytes the field needs.</param>
+    /// <param name="what">What the bytes are, for the failure message.</param>
+    private static ReadOnlySpan<byte> Take(ref ReadOnlySpan<byte> source, int count, string what)
+    {
+        if (count < 0 || source.Length < count)
+            throw new RealityHandshakeException(
+                $"The peer's message ended before {what}: needed {count} more bytes, had {source.Length}.");
+
+        ReadOnlySpan<byte> taken = source[..count];
+        source = source[count..];
+        return taken;
+    }
+
+    /// <summary>Reads TLS's three-byte big-endian length.</summary>
+    private static int ReadUInt24(ReadOnlySpan<byte> source) =>
+        (source[0] << 16) | (source[1] << 8) | source[2];
+
     /// <summary>Reads the first certificate out of a TLS 1.3 Certificate message body.</summary>
     private static byte[] ExtractLeafCertificate(ReadOnlyMemory<byte> body)
     {
         ReadOnlySpan<byte> span = body.Span;
 
-        if (span.Length < 4)
-            throw new RealityHandshakeException("The Certificate message is truncated.");
+        int contextLength = Take(ref span, 1, "the certificate request context length")[0];
+        Take(ref span, contextLength, "the certificate request context");
 
-        int contextLength = span[0];
-        span = span[(1 + contextLength)..];
+        int listLength = ReadUInt24(Take(ref span, 3, "the certificate list length"));
+        ReadOnlySpan<byte> list = Take(ref span, listLength, "the certificate list");
 
-        int listLength = (span[0] << 16) | (span[1] << 8) | span[2];
-        span = span.Slice(3, listLength);
-
-        if (span.Length < 3)
+        if (list.IsEmpty)
             throw new RealityHandshakeException("The server sent an empty certificate list.");
 
-        int certificateLength = (span[0] << 16) | (span[1] << 8) | span[2];
-        return span.Slice(3, certificateLength).ToArray();
+        int certificateLength = ReadUInt24(Take(ref list, 3, "the leaf certificate length"));
+        return Take(ref list, certificateLength, "the leaf certificate").ToArray();
     }
 
     /// <summary>One complete handshake message.</summary>
@@ -465,12 +517,31 @@ internal sealed class RealityTlsClient
     /// </remarks>
     private sealed class HandshakeReader(TlsRecordStream records)
     {
+        /// <summary>Largest handshake message we will reassemble, well past any real one.</summary>
+        private const int MaxHandshakeMessage = 1 << 18;
+
+        /// <summary>Cap on early application data, so a flood cannot exhaust memory.</summary>
+        private const int MaxLeftover = 1 << 16;
+
+        /// <summary>
+        /// Cap on ChangeCipherSpec records, which carry no meaning and are dropped.
+        /// </summary>
+        /// <remarks>
+        /// RFC 8446 §5 calls for a limit: without one, a peer can hold the handshake open forever
+        /// by sending nothing else, and the loop below would spin on it.
+        /// </remarks>
+        private const int MaxChangeCipherSpec = 8;
+
         private byte[] _buffer = new byte[TlsRecordStream.MaxCiphertext];
         private int _length;
         private int _consumed;
+        private int _changeCipherSpecSeen;
 
         /// <summary>Application data that arrived before the handshake finished.</summary>
         public List<byte> Leftover { get; } = [];
+
+        /// <summary>Whether any handshake bytes are still buffered but unconsumed.</summary>
+        public bool HasBufferedBytes => _length - _consumed > 0;
 
         public async ValueTask<HandshakeMessage> NextAsync(CancellationToken cancellationToken)
         {
@@ -484,12 +555,32 @@ internal sealed class RealityTlsClient
                 switch (record.Type)
                 {
                     case TlsContentType.ChangeCipherSpec:
+                        if (++_changeCipherSpecSeen > MaxChangeCipherSpec)
+                            throw new RealityHandshakeException(
+                                "The peer sent nothing but ChangeCipherSpec records.");
+
                         continue;
 
                     case TlsContentType.Alert:
                         throw new RealityHandshakeException(DescribeAlert(record.Payload.Span));
 
+                    case TlsContentType.ApplicationData when records.Read is null:
+                        // Before the server's keys exist, TlsRecordStream hands records back
+                        // verbatim — unauthenticated. Buffering one here would put bytes an
+                        // on-path attacker chose at the head of the "authenticated" tunnel, and
+                        // the handshake would still complete: injected records never enter the
+                        // transcript, so Finished and the REALITY HMAC both still verify.
+                        throw new RealityHandshakeException(
+                            "The peer sent application data before its keys were established. " +
+                            "Nothing can authenticate those bytes, so they are refused rather " +
+                            "than passed to the caller.");
+
                     case TlsContentType.ApplicationData:
+                        if (Leftover.Count + record.Payload.Length > MaxLeftover)
+                            throw new RealityHandshakeException(
+                                $"The peer sent more than {MaxLeftover} bytes of application data before " +
+                                "finishing its handshake.");
+
                         Leftover.AddRange(record.Payload.ToArray());
                         continue;
 
@@ -506,6 +597,10 @@ internal sealed class RealityTlsClient
         private void Append(ReadOnlySpan<byte> data)
         {
             Compact();
+
+            if (_length + data.Length > MaxHandshakeMessage)
+                throw new RealityHandshakeException(
+                    $"The peer's handshake message exceeded {MaxHandshakeMessage} bytes.");
 
             if (_length + data.Length > _buffer.Length)
                 Array.Resize(ref _buffer, Math.Max(_buffer.Length * 2, _length + data.Length));

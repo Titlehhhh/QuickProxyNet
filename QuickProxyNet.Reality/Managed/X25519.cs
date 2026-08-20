@@ -279,7 +279,14 @@ internal static class X25519
         result[4] = r4;
     }
 
-    private static void MulSmall(Span<ulong> result, Span<ulong> value, ulong scalar)
+    /// <summary>Multiplies a field element by a small scalar.</summary>
+    /// <remarks>
+    /// Internal rather than private so tests can compare it against arbitrary-precision
+    /// arithmetic on adversarial limb patterns. A dropped carry mask here would be wrong by
+    /// exactly 2^51 for roughly one input in a billion — a defect no end-to-end test could
+    /// reach, and one that would surface as an unreproducible handshake failure.
+    /// </remarks>
+    internal static void MulSmall(Span<ulong> result, Span<ulong> value, ulong scalar)
     {
         UInt128 h0 = (UInt128)value[0] * scalar;
         UInt128 h1 = (UInt128)value[1] * scalar;
@@ -302,6 +309,10 @@ internal static class X25519
         result[3] = r3;
         result[4] = r4;
     }
+
+    /// <summary>Multiplies two field elements. Internal for the same reason as <see cref="MulSmall"/>.</summary>
+    internal static void MultiplyForTests(Span<ulong> result, Span<ulong> left, Span<ulong> right) =>
+        Mul(result, left, right);
 
     private static void Carry(Span<ulong> fe)
     {

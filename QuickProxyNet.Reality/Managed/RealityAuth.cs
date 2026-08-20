@@ -143,10 +143,18 @@ internal static class RealityAuth
         Span<byte> nonce = stackalloc byte[12];
         clientRandom[20..].CopyTo(nonce);
 
+        // Written to a separate buffer and copied back, rather than encrypted in place. The
+        // destination is a slice of the same array that is passed as additional data, and
+        // AesGcm does not document what it does when output and AAD overlap — it happens to
+        // work on the platforms tested only because GHASH consumes the AAD before any
+        // ciphertext is produced. Depending on that is not worth 32 bytes of stack.
+        Span<byte> sealedBlob = stackalloc byte[SessionIdSize];
+
         try
         {
             using var aes = new AesGcm(authKey, tagSizeInBytes: 16);
-            aes.Encrypt(nonce, plaintext, sessionId[..16], sessionId[16..], clientHello);
+            aes.Encrypt(nonce, plaintext, sealedBlob[..16], sealedBlob[16..], clientHello);
+            sealedBlob.CopyTo(sessionId);
         }
         finally
         {
