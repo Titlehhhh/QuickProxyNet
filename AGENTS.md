@@ -208,6 +208,36 @@ not "clean up" any of them without reading the reasoning first.
     way the VLESS case was not: VMessAEAD seals the request header under a key derived
     from the id, so a wrong guess costs a failed handshake, never a cleartext id.
 
+16. **REALITY's auth key is the TLS `key_share` private key.** Not a second keypair
+    smuggled somewhere — the client computes `X25519(clientKeySharePrivate, pbk)`, and
+    the server recovers the public half straight out of `clientHello.keyShares` (the
+    X25519 entry, or the X25519 tail of an `X25519MLKEM768` one). The result is
+    `HKDF-SHA256(salt: clientRandom[0..20], info: "REALITY")`, and it keys an
+    AES-256-GCM whose ciphertext plus tag exactly fill the 32-byte `session_id`. The
+    additional data is the **raw ClientHello with `session_id` zeroed**, which is what
+    stops a censor lifting the blob out of a recorded handshake and replaying it inside
+    a hello of its own. `session_id` sits at a fixed offset 39, and only because a TLS
+    1.3 hello always declares a full 32-byte session id. The server then proves itself
+    with `HMAC-SHA512(authKey, leafPublicKey)` placed in the leaf certificate's
+    *signature* field — a field `X509Certificate2` does not expose, so the certificate
+    has to be parsed by hand. Source: `XTLS/REALITY` `tls.go` and Xray-core
+    `transport/internet/reality/reality.go`.
+
+17. **REALITY runs only over raw TCP.** Xray refuses `security=reality` with a `ws` or
+    `httpupgrade` transport outright — *"REALITY only supports RAW, XHTTP and gRPC for
+    now"* — and does it at config-load time, so the failure reaches a caller as an
+    opaque launch error rather than as anything about transports. A share link
+    combining the two describes something no server can serve; reject it by name.
+
+18. **Xray's own SOCKS inbound stalls above roughly one TLS record.** A request of
+    16 000 bytes round-trips; 16 500 hangs until the client gives up, with no error
+    logged by either process. Not ours, and worth remembering before spending an
+    afternoon on it again: `LargeRequestDiagnosticTests` isolates it by carrying
+    100 000 bytes through `Socks5Client` against a plain relay and then stalling the
+    same request against Xray with no VLESS, TLS or REALITY anywhere in the path.
+    Disabling inbound sniffing and splitting the write into 4 KiB slices change
+    nothing. Verified against Xray-core 26.3.27 on Windows.
+
 ## Development Rules
 
 - Keep hot protocol paths allocation-conscious: prefer `Span<T>`,
