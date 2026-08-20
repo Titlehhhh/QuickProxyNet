@@ -89,8 +89,13 @@ internal sealed class TlsRecordProtection : IDisposable
 
     public TlsRecordProtection(TlsCipherSuite suite, ReadOnlySpan<byte> trafficSecret)
     {
-        byte[] key = new byte[suite.KeyLength];
         _iv = new byte[TlsCipherSuite.NonceLength];
+
+        // On the stack rather than the heap: this is a record-protection key, and the largest a
+        // TLS 1.3 suite uses is 32 bytes. A fixed frame keeps it out of the GC heap entirely, so
+        // there is no copy for a collection to move and no window before the clearing below.
+        Span<byte> key = stackalloc byte[32];
+        key = key[..suite.KeyLength];
 
         try
         {

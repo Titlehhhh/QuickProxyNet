@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Formats.Asn1;
 using System.Security.Cryptography;
@@ -62,6 +63,41 @@ internal sealed class RealityTlsClient
 
     private const string Ed25519Oid = "1.3.101.112";
 
+    /// <summary>The one-byte ChangeCipherSpec payload, which never varies.</summary>
+    private static readonly byte[] ChangeCipherSpecPayload = [1];
+
+    /// <summary>
+    /// Every secret the handshake derives, in one pooled buffer.
+    /// </summary>
+    /// <remarks>
+    /// Individually these are seven allocations of 32 to 48 bytes — nothing worth chasing once
+    /// per connection. Together they are the reason a single <c>finally</c> can guarantee all of
+    /// them are cleared. The seven separate <see cref="CryptographicOperations.ZeroMemory"/> calls
+    /// this replaces were correct, and were exactly the shape a later edit forgets to extend:
+    /// add an eighth secret and nothing tells you the clearing did not follow.
+    /// </remarks>
+    private readonly struct HandshakeSecrets(byte[] buffer, int hashLength)
+    {
+        public static HandshakeSecrets Rent(int hashLength) =>
+            new(ArrayPool<byte>.Shared.Rent(X25519.KeySize + (6 * hashLength)), hashLength);
+
+        /// <summary>The raw X25519 shared secret, before the key schedule touches it.</summary>
+        public Span<byte> Shared => buffer.AsSpan(0, X25519.KeySize);
+
+        public Span<byte> HandshakeSecret => At(0);
+        public Span<byte> ClientHandshakeTraffic => At(1);
+        public Span<byte> ServerHandshakeTraffic => At(2);
+        public Span<byte> MasterSecret => At(3);
+        public Span<byte> ClientApplicationTraffic => At(4);
+        public Span<byte> ServerApplicationTraffic => At(5);
+
+        private Span<byte> At(int index) =>
+            buffer.AsSpan(X25519.KeySize + (index * hashLength), hashLength);
+
+        /// <summary>Clears every secret and returns the buffer to the pool.</summary>
+        public void Return() => ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+    }
+
     /// <summary>
     /// Performs the handshake over <paramref name="transport"/> and returns the tunnelled stream.
     /// </summary>
@@ -84,6 +120,7 @@ internal sealed class RealityTlsClient
         var records = new TlsRecordStream(transport);
         byte[] authKey = new byte[RealityAuth.AuthKeySize];
         TlsClientHello.Result hello = default;
+        HandshakeReader? messages = null;
 
         try
         {
@@ -92,7 +129,7 @@ internal sealed class RealityTlsClient
 
             RealityAuth.DeriveAuthKey(authKey, hello.PrivateKey, options.PublicKey, hello.Handshake.AsSpan(6, 32));
 
-            byte[] shortId = new byte[RealityAuth.ShortIdSize];
+            Span<byte> shortId = stackalloc byte[RealityAuth.ShortIdSize];
             RealityAuth.ParseShortId(shortId, options.ShortId);
 
             RealityAuth.SealSessionId(
@@ -105,7 +142,7 @@ internal sealed class RealityTlsClient
             await records.WriteAsync(TlsContentType.Handshake, hello.Handshake, cancellationToken).ConfigureAwait(false);
 
             // ---- ServerHello ----
-            var messages = new HandshakeReader(records);
+            messages = new HandshakeReader(records);
             HandshakeMessage serverHello = await messages.NextAsync(cancellationToken).ConfigureAwait(false);
             if (serverHello.Type != TlsHandshakeType.ServerHello)
                 throw new RealityHandshakeException($"Expected a ServerHello, got {serverHello.Type}.");
@@ -127,21 +164,18 @@ internal sealed class RealityTlsClient
             transcript.AppendData(serverHello.Raw);
 
             // ---- Key schedule ----
-            byte[] shared = new byte[X25519.KeySize];
-            byte[] handshakeSecret = new byte[parsed.Suite.HashLength];
-            byte[] clientHandshakeTraffic = new byte[parsed.Suite.HashLength];
-            byte[] serverHandshakeTraffic = new byte[parsed.Suite.HashLength];
-            byte[] masterSecret = new byte[parsed.Suite.HashLength];
+            HandshakeSecrets secrets = HandshakeSecrets.Rent(parsed.Suite.HashLength);
 
             try
             {
-                X25519.Agree(shared, hello.PrivateKey, parsed.KeyShare);
+                X25519.Agree(secrets.Shared, hello.PrivateKey, parsed.KeyShare);
 
                 DeriveHandshakeSecrets(
-                    parsed.Suite, shared, transcript.GetCurrentHash(),
-                    handshakeSecret, clientHandshakeTraffic, serverHandshakeTraffic, masterSecret);
+                    parsed.Suite, secrets.Shared, transcript.GetCurrentHash(),
+                    secrets.HandshakeSecret, secrets.ClientHandshakeTraffic,
+                    secrets.ServerHandshakeTraffic, secrets.MasterSecret);
 
-                records.Read = new TlsRecordProtection(parsed.Suite, serverHandshakeTraffic);
+                records.Read = new TlsRecordProtection(parsed.Suite, secrets.ServerHandshakeTraffic);
 
                 // ---- Server flight ----
                 byte[]? leafCertificate = null;
@@ -166,7 +200,8 @@ internal sealed class RealityTlsClient
                         case TlsHandshakeType.Finished:
                             // Verified against the transcript as it stood *before* this message.
                             VerifyServerFinished(
-                                parsed.Suite, serverHandshakeTraffic, transcript.GetCurrentHash(), message.Body.Span);
+                                parsed.Suite, secrets.ServerHandshakeTraffic,
+                                transcript.GetCurrentHash(), message.Body.Span);
                             serverFinished = true;
                             transcript.AppendData(message.Raw);
                             break;
@@ -194,44 +229,33 @@ internal sealed class RealityTlsClient
                 // The ChangeCipherSpec is meaningless in TLS 1.3 and is sent only so middleboxes
                 // on the path see the shape of a TLS 1.2 handshake, which is the whole point of a
                 // protocol designed to look unremarkable.
-                await records.WriteAsync(TlsContentType.ChangeCipherSpec, new byte[] { 1 }, cancellationToken)
+                await records.WriteAsync(TlsContentType.ChangeCipherSpec, ChangeCipherSpecPayload, cancellationToken)
                     .ConfigureAwait(false);
 
-                records.Write = new TlsRecordProtection(parsed.Suite, clientHandshakeTraffic);
+                records.Write = new TlsRecordProtection(parsed.Suite, secrets.ClientHandshakeTraffic);
 
-                byte[] finished = BuildFinished(parsed.Suite, clientHandshakeTraffic, transcriptAfterServerFinished);
+                byte[] finished = BuildFinished(
+                    parsed.Suite, secrets.ClientHandshakeTraffic, transcriptAfterServerFinished);
                 await records.WriteAsync(TlsContentType.Handshake, finished, cancellationToken).ConfigureAwait(false);
 
                 // ---- Application keys ----
-                byte[] clientApplication = new byte[parsed.Suite.HashLength];
-                byte[] serverApplication = new byte[parsed.Suite.HashLength];
-                try
-                {
-                    TlsKeySchedule.DeriveSecret(
-                        parsed.Suite.Hash, masterSecret, "c ap traffic"u8, transcriptAfterServerFinished, clientApplication);
-                    TlsKeySchedule.DeriveSecret(
-                        parsed.Suite.Hash, masterSecret, "s ap traffic"u8, transcriptAfterServerFinished, serverApplication);
+                TlsKeySchedule.DeriveSecret(
+                    parsed.Suite.Hash, secrets.MasterSecret, "c ap traffic"u8,
+                    transcriptAfterServerFinished, secrets.ClientApplicationTraffic);
+                TlsKeySchedule.DeriveSecret(
+                    parsed.Suite.Hash, secrets.MasterSecret, "s ap traffic"u8,
+                    transcriptAfterServerFinished, secrets.ServerApplicationTraffic);
 
-                    records.Write?.Dispose();
-                    records.Read?.Dispose();
-                    records.Write = new TlsRecordProtection(parsed.Suite, clientApplication);
-                    records.Read = new TlsRecordProtection(parsed.Suite, serverApplication);
-                }
-                finally
-                {
-                    CryptographicOperations.ZeroMemory(clientApplication);
-                    CryptographicOperations.ZeroMemory(serverApplication);
-                }
+                records.Write?.Dispose();
+                records.Read?.Dispose();
+                records.Write = new TlsRecordProtection(parsed.Suite, secrets.ClientApplicationTraffic);
+                records.Read = new TlsRecordProtection(parsed.Suite, secrets.ServerApplicationTraffic);
 
                 return new RealityTlsStream(transport, records, messages.Leftover);
             }
             finally
             {
-                CryptographicOperations.ZeroMemory(shared);
-                CryptographicOperations.ZeroMemory(handshakeSecret);
-                CryptographicOperations.ZeroMemory(clientHandshakeTraffic);
-                CryptographicOperations.ZeroMemory(serverHandshakeTraffic);
-                CryptographicOperations.ZeroMemory(masterSecret);
+                secrets.Return();
             }
         }
         catch
@@ -248,6 +272,9 @@ internal sealed class RealityTlsClient
             // that discipline pointless.
             if (hello.PrivateKey is not null)
                 CryptographicOperations.ZeroMemory(hello.PrivateKey);
+
+            // Safe here: the stream returned above has already copied whatever Leftover held.
+            messages?.Return();
         }
     }
 
@@ -531,7 +558,7 @@ internal sealed class RealityTlsClient
         /// </remarks>
         private const int MaxChangeCipherSpec = 8;
 
-        private byte[] _buffer = new byte[TlsRecordStream.MaxCiphertext];
+        private byte[] _buffer = ArrayPool<byte>.Shared.Rent(TlsRecordStream.MaxCiphertext);
         private int _length;
         private int _consumed;
         private int _changeCipherSpecSeen;
@@ -541,6 +568,22 @@ internal sealed class RealityTlsClient
 
         /// <summary>Whether any handshake bytes are still buffered but unconsumed.</summary>
         public bool HasBufferedBytes => _length - _consumed > 0;
+
+        /// <summary>
+        /// Returns the reassembly buffer to the pool. <see cref="Leftover"/> is a separate list
+        /// and stays valid afterwards.
+        /// </summary>
+        public void Return()
+        {
+            if (_buffer.Length == 0)
+                return;
+
+            // Cleared: it held the server's certificate and every other handshake message.
+            ArrayPool<byte>.Shared.Return(_buffer, clearArray: true);
+            _buffer = [];
+            _length = 0;
+            _consumed = 0;
+        }
 
         public async ValueTask<HandshakeMessage> NextAsync(CancellationToken cancellationToken)
         {
@@ -602,7 +645,14 @@ internal sealed class RealityTlsClient
                     $"The peer's handshake message exceeded {MaxHandshakeMessage} bytes.");
 
             if (_length + data.Length > _buffer.Length)
-                Array.Resize(ref _buffer, Math.Max(_buffer.Length * 2, _length + data.Length));
+            {
+                // Grown by renting, not by Array.Resize: a resized array does not come from the
+                // pool, and returning it later would put a foreign buffer into the shared pool.
+                byte[] bigger = ArrayPool<byte>.Shared.Rent(Math.Max(_buffer.Length * 2, _length + data.Length));
+                _buffer.AsSpan(0, _length).CopyTo(bigger);
+                ArrayPool<byte>.Shared.Return(_buffer, clearArray: true);
+                _buffer = bigger;
+            }
 
             data.CopyTo(_buffer.AsSpan(_length));
             _length += data.Length;
