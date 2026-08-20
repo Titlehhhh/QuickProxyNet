@@ -40,5 +40,6 @@
     </ItemGroup>
     <ItemGroup>
         <InternalsVisibleTo Include="QuickProxyNet.Tests"/>
+        <InternalsVisibleTo Include="QuickProxyNet.Benchmarks"/>
     </ItemGroup>
 </Project>
