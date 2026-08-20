@@ -1,8 +1,10 @@
 # QuickProxyNet
 
-High-performance, zero-dependency C# library for connecting through HTTP, HTTPS, SOCKS4, SOCKS4a, and SOCKS5 proxies. Returns a raw `Stream` for direct data access.
+High-performance, zero-dependency C# library for connecting through HTTP, HTTPS, SOCKS4, SOCKS4a and SOCKS5 proxies, and through the VPN-style protocols VLESS, VMess and Trojan. Returns a raw `Stream` for direct data access.
 
-**Targets:** .NET 8 / .NET 9 / .NET 10
+VLESS REALITY lives in the separate `QuickProxyNet.Reality` package, so the core keeps its zero-dependency promise.
+
+**Targets:** .NET 8 / .NET 9 / .NET 10 / .NET 11
 
 ## Quick Start
 

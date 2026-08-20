@@ -7,13 +7,16 @@
 
 **QuickProxyNet** is a high-performance, zero-dependency C# library for connecting to servers through proxy protocols. It provides direct `Stream` access with minimal allocations and latency — ideal for mass proxy checking, crawlers, and any scenario where thousands of proxy connections are made in parallel.
 
-**Targets:** .NET 8 / .NET 9 / .NET 10
+**Targets:** .NET 8 / .NET 9 / .NET 10 / .NET 11
 
 ## Features
 
 - **Zero runtime dependencies** — BCL only, no third-party packages
 - **Zero-alloc protocol logic** — `ArrayPool`, `stackalloc`, `Utf8Formatter`, `ValueTask` throughout
-- **5 proxy protocols** — HTTP, HTTPS, SOCKS4, SOCKS4a, SOCKS5
+- **5 classic proxy protocols** — HTTP, HTTPS, SOCKS4, SOCKS4a, SOCKS5
+- **3 VPN-style protocols** — VLESS, VMess (VMessAEAD), Trojan, over `tcp`, `ws` or `httpupgrade`
+- **Share-link parsing** — `vless://`, `vmess://`, `trojan://`, validated against a 21 403-link real-world corpus
+- **VLESS REALITY** — in the separate `QuickProxyNet.Reality` package
 - **Static one-liner API** — `Proxy.ConnectAsync(uri, host, port)` for mass checkers
 - **Structured error codes** — `ProxyProtocolException` with `ProxyErrorCode` enum for programmatic error handling
 - **Timeout support** — per-connection timeouts with `ProxyErrorCode.Timeout`
