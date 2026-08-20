@@ -151,8 +151,15 @@ public class X25519Test
     /// vector and every random handshake while still breaking one connection in a billion. These
     /// compare the arithmetic directly, with the maximum limb values deliberately included.
     /// </remarks>
-    [Fact]
-    public void Multiply_MatchesArbitraryPrecision()
+    /// <summary>
+    /// Limb patterns that sit on the carry boundaries, plus a fixed pseudo-random spread.
+    /// </summary>
+    /// <remarks>
+    /// The upper bound is 2^52, not 2^51: the ladder adds field elements without carrying, so the
+    /// field operations really are handed limbs above the mask, and an implementation that only
+    /// survives canonical inputs would pass a narrower set of cases and still fail in the ladder.
+    /// </remarks>
+    private static List<ulong[]> CarryStressCases()
     {
         const ulong mask51 = (1UL << 51) - 1;
 
@@ -180,6 +187,13 @@ public class X25519Test
             ]);
         }
 
+        return cases;
+    }
+
+    [Fact]
+    public void Multiply_MatchesArbitraryPrecision()
+    {
+        List<ulong[]> cases = CarryStressCases();
         ulong[] result = new ulong[5];
 
         foreach (ulong[] left in cases)
@@ -199,6 +213,33 @@ public class X25519Test
             Assert.Equal(
                 ToInteger(left) * 121665 % Prime,
                 ToInteger(result));
+        }
+    }
+
+    /// <summary>
+    /// Squaring against both arbitrary-precision arithmetic and the general multiply.
+    /// </summary>
+    /// <remarks>
+    /// <c>Sqr</c> exists only as a faster <c>Mul(r, v, v)</c>: it folds the pairs of equal cross
+    /// products into single doubled ones, which is where a squaring routine goes wrong — a
+    /// doubling missed on one term is a result that is wrong by a limb and right everywhere the
+    /// term happens to be zero. Checking it against both references pins the shortcut to the
+    /// thing it is a shortcut for.
+    /// </remarks>
+    [Fact]
+    public void Square_MatchesMultiplyAndArbitraryPrecision()
+    {
+        List<ulong[]> cases = CarryStressCases();
+        ulong[] squared = new ulong[5];
+        ulong[] multiplied = new ulong[5];
+
+        foreach (ulong[] value in cases)
+        {
+            X25519.Sqr(squared, value);
+            X25519.MultiplyForTests(multiplied, value, value);
+
+            Assert.Equal(ToInteger(value) * ToInteger(value) % Prime, ToInteger(squared));
+            Assert.Equal(ToInteger(multiplied), ToInteger(squared));
         }
     }
 

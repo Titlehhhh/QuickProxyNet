@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -120,8 +121,12 @@ internal static class TlsKeySchedule
     {
         iv.CopyTo(nonce);
 
-        for (int i = 0; i < 8; i++)
-            nonce[nonce.Length - 1 - i] ^= (byte)(sequenceNumber >> (8 * i));
+        // The byte loop this replaces did the same thing eight times over: the sequence number is
+        // xored in big-endian order into the last eight bytes, which is one read, one xor and one
+        // write once it is named as such. It runs on every single record, in both directions.
+        Span<byte> tail = nonce[^sizeof(ulong)..];
+        BinaryPrimitives.WriteUInt64BigEndian(
+            tail, BinaryPrimitives.ReadUInt64BigEndian(tail) ^ sequenceNumber);
     }
 
     /// <summary>Converts a label to bytes; for callers that do not have a UTF-8 literal.</summary>
