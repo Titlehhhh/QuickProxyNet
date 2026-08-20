@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace QuickProxyNet.Reality.Managed;
 
 /// <summary>
@@ -54,13 +56,34 @@ internal sealed class RealityTlsStream : Stream
         set => throw new NotSupportedException();
     }
 
-    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+    /// <summary>Reads decrypted application data.</summary>
+    /// <param name="buffer">Receives the data.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <remarks>
+    /// Not an <c>async</c> method, so that draining a record already in hand costs a copy and a
+    /// return rather than an async state machine. A 16 KiB record read 4 KiB at a time takes that
+    /// path three times out of four, and the record layer underneath takes its own synchronous
+    /// path whenever the next record is already buffered.
+    /// </remarks>
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (buffer.IsEmpty)
-            return 0;
+            return new ValueTask<int>(0);
 
+        if (!_pending.IsEmpty)
+            return new ValueTask<int>(TakePending(buffer));
+
+        if (_receivedCloseNotify)
+            return new ValueTask<int>(0);
+
+        return ReadFromRecordsAsync(buffer, cancellationToken);
+    }
+
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    private async ValueTask<int> ReadFromRecordsAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+    {
         while (_pending.IsEmpty)
         {
             if (_receivedCloseNotify)
@@ -70,6 +93,12 @@ internal sealed class RealityTlsStream : Stream
                 return 0;
         }
 
+        return TakePending(buffer);
+    }
+
+    /// <summary>Copies out of the record in hand and advances past what was taken.</summary>
+    private int TakePending(Memory<byte> buffer)
+    {
         int count = Math.Min(buffer.Length, _pending.Length);
         _pending.Span[..count].CopyTo(buffer.Span);
         _pending = _pending[count..];
@@ -78,6 +107,7 @@ internal sealed class RealityTlsStream : Stream
     }
 
     /// <summary>Reads records until one yields application data. Returns false at end of stream.</summary>
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     private async ValueTask<bool> FillAsync(CancellationToken cancellationToken)
     {
         while (true)
@@ -145,19 +175,22 @@ internal sealed class RealityTlsStream : Stream
         throw new RealityHandshakeException($"Unexpected post-handshake message {type}.");
     }
 
-    public override async ValueTask WriteAsync(
+    /// <summary>Writes application data, splitting it across records as RFC 8446 §5.1 requires.</summary>
+    /// <param name="buffer">The data to send.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <remarks>
+    /// The split into records happens inside the record layer rather than here, so that a write
+    /// larger than one record still reaches the transport as few writes — the loop this replaces
+    /// handed down one record at a time, and each of those was its own write and its own flush.
+    /// </remarks>
+    public override ValueTask WriteAsync(
         ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        while (!buffer.IsEmpty)
-        {
-            int chunk = Math.Min(buffer.Length, TlsRecordStream.MaxPlaintext);
-            await _records.WriteAsync(TlsContentType.ApplicationData, buffer[..chunk], cancellationToken)
-                .ConfigureAwait(false);
-
-            buffer = buffer[chunk..];
-        }
+        return buffer.IsEmpty
+            ? ValueTask.CompletedTask
+            : _records.WriteApplicationDataAsync(buffer, cancellationToken);
     }
 
     public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
