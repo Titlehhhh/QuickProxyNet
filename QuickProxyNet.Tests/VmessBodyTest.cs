@@ -279,9 +279,7 @@ public class VmessBodyTest
         // 17 of the 18 length bytes: truncation, never a clean end of stream.
         var transport = new DuplexTestStream(Hex(ResponseHeaderSimple)[..17]);
 
-        await Assert.ThrowsAsync<EndOfStreamException>(async () =>
-            await VmessResponse.ReadAsync(
-                transport, ResponseBodyKey, ResponseBodyIv, RespV, CancellationToken.None));
+        await AssertClosedBeforeResponseAsync(transport);
     }
 
     [Fact]
@@ -289,9 +287,24 @@ public class VmessBodyTest
     {
         var transport = new DuplexTestStream([]);
 
-        await Assert.ThrowsAsync<EndOfStreamException>(async () =>
+        await AssertClosedBeforeResponseAsync(transport);
+    }
+
+    /// <summary>
+    /// A connection that ends before the response header is how a VMess server rejects a request
+    /// it cannot authenticate. That has to surface as a proxy error naming the protocol and the
+    /// usual causes, with the raw end-of-stream kept underneath — not as the raw end-of-stream.
+    /// </summary>
+    private static async Task AssertClosedBeforeResponseAsync(DuplexTestStream transport)
+    {
+        var ex = await Assert.ThrowsAsync<ProxyProtocolException>(async () =>
             await VmessResponse.ReadAsync(
                 transport, ResponseBodyKey, ResponseBodyIv, RespV, CancellationToken.None));
+
+        Assert.Equal(ProxyErrorCode.ConnectionFailed, ex.ErrorCode);
+        Assert.IsType<EndOfStreamException>(ex.InnerException);
+        Assert.Contains("VMess", ex.Message);
+        Assert.Contains("clock", ex.Message);
     }
 
     [Fact]
@@ -300,9 +313,7 @@ public class VmessBodyTest
         // Full 18-byte length block, then only 19 of the 20 sealed header bytes.
         var transport = new DuplexTestStream(Hex(ResponseHeaderSimple)[..^1]);
 
-        await Assert.ThrowsAsync<EndOfStreamException>(async () =>
-            await VmessResponse.ReadAsync(
-                transport, ResponseBodyKey, ResponseBodyIv, RespV, CancellationToken.None));
+        await AssertClosedBeforeResponseAsync(transport);
     }
 
     [Fact]
@@ -316,7 +327,9 @@ public class VmessBodyTest
             await VmessResponse.ReadAsync(
                 transport, ResponseBodyKey, ResponseBodyIv, RespV, CancellationToken.None));
 
-        Assert.Equal(ProxyErrorCode.InvalidResponse, ex.ErrorCode);
+        // A length block sealed under other keys is the same class of failure as a verifier
+        // mismatch — the server rejected us or something else answered — so it gets the same code.
+        Assert.Equal(ProxyErrorCode.AuthFailed, ex.ErrorCode);
         Assert.IsType<AuthenticationTagMismatchException>(ex.InnerException);
     }
 
@@ -331,7 +344,7 @@ public class VmessBodyTest
             await VmessResponse.ReadAsync(
                 transport, ResponseBodyKey, ResponseBodyIv, RespV, CancellationToken.None));
 
-        Assert.Equal(ProxyErrorCode.InvalidResponse, ex.ErrorCode);
+        Assert.Equal(ProxyErrorCode.AuthFailed, ex.ErrorCode);
     }
 
     [Fact]

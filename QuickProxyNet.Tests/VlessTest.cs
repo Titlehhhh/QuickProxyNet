@@ -1,3 +1,4 @@
+using QuickProxyNet.Reality;
 using QuickProxyNet.Tests.Helpers;
 
 namespace QuickProxyNet.Tests;
@@ -436,15 +437,54 @@ public class VlessTest
         Assert.NotEmpty(stream.WrittenBytes);
     }
 
-    [Fact]
-    public async Task Client_Reality_ThrowsNotSupported()
+    /// <summary>
+    /// A <c>pbk</c> that is not a key is a configuration error and must be reported as one —
+    /// naming the value, before anything is written — rather than as "REALITY not supported"
+    /// (which it is) or as an ArgumentException from inside the handshake.
+    /// </summary>
+    [Theory]
+    [InlineData("x")]                                        // not base64url at all
+    [InlineData("AAAA")]                                     // decodes to 3 bytes, not 32
+    public async Task Client_Reality_MalformedPublicKey_ThrowsFormatBeforeWriting(string pbk)
     {
         var stream = new FakeProxyStream([0x00, 0x00]);
         var client = new VlessClient(
-            VlessShareLink.Parse($"vless://{Uuid}@example.com:443?security=reality&pbk=x"));
+            VlessShareLink.Parse($"vless://{Uuid}@example.com:443?security=reality&pbk={pbk}"));
 
-        await Assert.ThrowsAsync<NotSupportedException>(
+        var ex = await Assert.ThrowsAsync<FormatException>(
             () => client.ConnectAsync(stream, "example.org", 443, CancellationToken.None).AsTask());
+
+        Assert.Contains(pbk, ex.Message);
+    }
+
+    /// <summary>
+    /// REALITY failures are proxy errors like any other: the type carries a code a caller can
+    /// branch on, and the two codes it uses mean different things to act on.
+    /// </summary>
+    [Fact]
+    public void RealityHandshakeException_IsAProxyProtocolExceptionWithACode()
+    {
+        Assert.IsAssignableFrom<ProxyProtocolException>(new RealityHandshakeException("x"));
+        Assert.Equal(ProxyErrorCode.InvalidResponse, new RealityHandshakeException("x").ErrorCode);
+        Assert.Equal(ProxyErrorCode.AuthFailed,
+            new RealityHandshakeException(ProxyErrorCode.AuthFailed, "x").ErrorCode);
+    }
+
+    /// <summary>
+    /// The user id is the credential. A mistyped real one lands in the same error as garbage
+    /// does, and the error text ends up in logs — so the text must not contain the id.
+    /// </summary>
+    [Fact]
+    public void Client_BadUserId_DoesNotEchoTheIdInTheError()
+    {
+        const string almostAUuid = "11223344-5566-7788-99aa-bbccddeeff00-SECRETTAIL";
+
+        var ex = Assert.Throws<ArgumentException>(() =>
+            new VlessClient(new VlessOptions { Id = almostAUuid, Host = "example.com", Port = 443 }));
+
+        Assert.DoesNotContain("SECRETTAIL", ex.Message);
+        Assert.DoesNotContain("11223344", ex.Message);
+        Assert.Contains("user id", ex.Message);
     }
 
     [Fact]

@@ -159,14 +159,14 @@ internal sealed class VisionStream : Stream
                     return 0; // a clean close on a frame boundary is the end of the stream
 
                 if (Buffered < HeaderSize)
-                    throw new EndOfStreamException("The peer closed the connection inside a Vision frame header.");
+                    throw new EndOfStreamException("The VLESS server closed the connection inside an xtls-rprx-vision frame header, mid-response.");
 
                 ReadFrameHeader();
                 continue;
             }
 
             if (Buffered == 0 && await FillSomeAsync(cancellationToken).ConfigureAwait(false) == 0)
-                throw new EndOfStreamException("The peer closed the connection inside a Vision frame.");
+                throw new EndOfStreamException("The VLESS server closed the connection inside an xtls-rprx-vision frame, mid-response.");
 
             if (_remainingContent > 0)
             {
@@ -220,14 +220,14 @@ internal sealed class VisionStream : Stream
                     return 0;
 
                 if (Buffered < HeaderSize)
-                    throw new EndOfStreamException("The peer closed the connection inside a Vision frame header.");
+                    throw new EndOfStreamException("The VLESS server closed the connection inside an xtls-rprx-vision frame header, mid-response.");
 
                 ReadFrameHeader();
                 continue;
             }
 
             if (Buffered == 0 && FillSome() == 0)
-                throw new EndOfStreamException("The peer closed the connection inside a Vision frame.");
+                throw new EndOfStreamException("The VLESS server closed the connection inside an xtls-rprx-vision frame, mid-response.");
 
             if (_remainingContent > 0)
             {
@@ -297,7 +297,7 @@ internal sealed class VisionStream : Stream
             if (read == 0)
             {
                 if (throwOnEof)
-                    throw new EndOfStreamException("The peer closed the connection inside a Vision frame header.");
+                    throw new EndOfStreamException("The VLESS server closed the connection inside an xtls-rprx-vision frame header, mid-response.");
                 return;
             }
 
@@ -315,7 +315,7 @@ internal sealed class VisionStream : Stream
             if (read == 0)
             {
                 if (throwOnEof)
-                    throw new EndOfStreamException("The peer closed the connection inside a Vision frame header.");
+                    throw new EndOfStreamException("The VLESS server closed the connection inside an xtls-rprx-vision frame header, mid-response.");
                 return;
             }
 

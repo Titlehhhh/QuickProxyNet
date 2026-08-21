@@ -34,7 +34,7 @@ public sealed class VlessClient : ProxyClient
         Span<byte> probe = stackalloc byte[UuidCodec.Size];
         if (!UuidCodec.TryWriteBigEndian(options.Id, probe))
             throw new ArgumentException(
-                $"VLESS user id '{options.Id}' is unusable: it is neither a canonical UUID nor " +
+                $"VLESS user id is unusable ({options.Id.Length} characters): it is neither a canonical UUID nor " +
                 "a string of 1..30 characters (which would be mapped to a UUID).",
                 nameof(options));
 
@@ -153,15 +153,24 @@ public sealed class VlessClient : ProxyClient
         string padded = value.Replace('-', '+').Replace('_', '/');
         padded += (padded.Length % 4) switch { 2 => "==", 3 => "=", _ => "" };
 
+        byte[] key;
         try
         {
-            return Convert.FromBase64String(padded);
+            key = Convert.FromBase64String(padded);
         }
         catch (FormatException ex)
         {
-            throw new NotSupportedException(
-                $"The REALITY public key '{value}' is not valid base64url.", ex);
+            throw new FormatException(
+                $"The REALITY public key '{value}' is not valid base64url (expected the 'pbk' value from the share link).", ex);
         }
+
+        // Checked here, before any byte is written, so a truncated pbk fails as a configuration
+        // error with the value named — not as an ArgumentException from inside the handshake.
+        if (key.Length != X25519.KeySize)
+            throw new FormatException(
+                $"The REALITY public key '{value}' decodes to {key.Length} bytes; an X25519 key is {X25519.KeySize}.");
+
+        return key;
     }
 
     private SslClientAuthenticationOptions BuildSslOptions() => new()

@@ -143,10 +143,21 @@ internal sealed class TlsRecordProtection : IDisposable
         Span<byte> nonce = stackalloc byte[TlsCipherSuite.NonceLength];
         TlsKeySchedule.BuildNonce(nonce, _iv, _sequenceNumber++);
 
-        if (_chaCha is not null)
-            _chaCha.Decrypt(nonce, ciphertext, tag, plaintext, header);
-        else
-            _aes!.Decrypt(nonce, ciphertext, tag, plaintext, header);
+        try
+        {
+            if (_chaCha is not null)
+                _chaCha.Decrypt(nonce, ciphertext, tag, plaintext, header);
+            else
+                _aes!.Decrypt(nonce, ciphertext, tag, plaintext, header);
+        }
+        catch (CryptographicException ex)
+        {
+            // A record that does not authenticate is either corruption or a peer writing under
+            // keys we do not share. Either way the bytes are not from the session we set up.
+            throw new RealityHandshakeException(
+                "A TLS record from the peer failed authentication, so it was not produced under " +
+                "this session's keys. The connection cannot be trusted past this point.", ex);
+        }
     }
 
     public void Dispose()
@@ -313,7 +324,8 @@ internal sealed class TlsRecordStream(Stream transport) : IDisposable
         // oversized record is the peer's error either way, and waiting for bytes we would throw
         // away only delays the failure — and, on a hostile peer, only buys it more of our time.
         if (length > MaxCiphertext)
-            throw new InvalidOperationException($"The peer sent a {length}-byte record, over the {MaxCiphertext} limit.");
+            throw new RealityHandshakeException(
+                $"The peer sent a {length}-byte TLS record, over the {MaxCiphertext}-byte limit of RFC 8446.");
 
         if (available < HeaderLength + length)
             return false;
@@ -332,7 +344,7 @@ internal sealed class TlsRecordStream(Stream transport) : IDisposable
         }
 
         if (length < TlsCipherSuite.TagLength)
-            throw new InvalidOperationException("The peer sent an encrypted record shorter than its own tag.");
+            throw new RealityHandshakeException("The peer sent an encrypted TLS record shorter than its own tag.");
 
         int contentLength = length - TlsCipherSuite.TagLength;
 
@@ -349,7 +361,7 @@ internal sealed class TlsRecordStream(Stream transport) : IDisposable
         int end = _plaintext.AsSpan(0, contentLength).LastIndexOfAnyExcept((byte)0) + 1;
 
         if (end == 0)
-            throw new InvalidOperationException("The peer sent a record with no content type.");
+            throw new RealityHandshakeException("The peer sent a TLS record with no content type.");
 
         record = new Record((TlsContentType)_plaintext[end - 1], _plaintext.AsMemory(0, end - 1));
         return true;

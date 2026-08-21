@@ -71,7 +71,7 @@ public sealed class VmessClient : ProxyClient
         Span<byte> probe = stackalloc byte[UuidCodec.Size];
         if (!UuidCodec.TryWriteBigEndian(options.Id, probe))
             throw new ArgumentException(
-                $"VMess user id '{options.Id}' is unusable: it is neither a canonical UUID nor " +
+                $"VMess user id is unusable ({options.Id.Length} characters): it is neither a canonical UUID nor " +
                 "a string of 1..30 characters (which would be mapped to a UUID).",
                 nameof(options));
 

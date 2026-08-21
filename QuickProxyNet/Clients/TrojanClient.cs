@@ -10,6 +10,16 @@ namespace QuickProxyNet;
 /// <c>ws</c> or <c>httpupgrade</c> transport. The remaining transports are rejected with
 /// <see cref="NotSupportedException"/>.
 /// </summary>
+/// <remarks>
+/// <b>A wrong password is not reported as one, by design of the protocol.</b> A Trojan server
+/// that does not recognise the password does not refuse: it forwards the connection to the
+/// ordinary web site it is disguised as, so the request header this client wrote is answered
+/// by that site. From here the symptom is a tunnel that opens normally and then carries the
+/// decoy's bytes — typically an HTTP response from a server you did not ask for, or a close.
+/// There is nothing on the wire that distinguishes that from a working tunnel, so no exception
+/// is raised; a caller that can recognise its own protocol's first bytes is the only place this
+/// can be caught.
+/// </remarks>
 public sealed class TrojanClient : ProxyClient
 {
     private readonly List<SslApplicationProtocol>? _alpn;

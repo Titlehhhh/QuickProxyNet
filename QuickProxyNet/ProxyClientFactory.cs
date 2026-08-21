@@ -42,7 +42,8 @@ public sealed class ProxyClientFactory
         int separator = trimmed.IndexOf("://", StringComparison.Ordinal);
         if (separator <= 0)
             throw new ArgumentException(
-                $"'{Summarize(trimmed)}' is not a proxy link: expected a scheme followed by '://'.", nameof(link));
+                $"The proxy link ({trimmed.Length} characters) has no scheme: expected something like " +
+                "'socks5://host:port' or 'vless://...'.", nameof(link));
 
         ReadOnlySpan<char> scheme = trimmed.AsSpan(0, separator);
 
@@ -64,7 +65,8 @@ public sealed class ProxyClientFactory
             scheme.Equals("socks5", StringComparison.OrdinalIgnoreCase))
         {
             if (!Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? uri))
-                throw new FormatException($"'{Summarize(trimmed)}' is not a well-formed {scheme} URI.");
+                throw new FormatException(
+                    $"The {scheme} proxy link is not a well-formed URI (expected '{scheme}://[user:password@]host:port').");
 
             return Create(uri);
         }
@@ -73,10 +75,6 @@ public sealed class ProxyClientFactory
             $"Proxy scheme '{scheme}' is not supported. This library speaks http, https, socks4, " +
             "socks4a, socks5, vless, trojan and vmess.");
     }
-
-    /// <summary>Shortens a link for an error message, so a credential does not end up in a log.</summary>
-    private static string Summarize(string link) =>
-        link.Length <= 24 ? link : string.Concat(link.AsSpan(0, 24), "…");
 
     /// <summary>
     /// Creates an IProxyClient instance based on the provided URI, automatically determining the proxy type
@@ -117,7 +115,9 @@ public sealed class ProxyClientFactory
             "socks4" => ProxyType.Socks4,
             "socks4a" => ProxyType.Socks4a,
             "socks5" => ProxyType.Socks5,
-            _ => throw new NotSupportedException($"Scheme: {proxyUri.Scheme}")
+            _ => throw new NotSupportedException(
+                $"Proxy scheme '{proxyUri.Scheme}' is not supported. This library speaks http, https, socks4, " +
+                "socks4a, socks5, vless, trojan and vmess.")
         };
 
         if (!string.IsNullOrEmpty(proxyUri.UserInfo))

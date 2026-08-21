@@ -324,7 +324,7 @@ internal sealed class RealityTlsClient
         TlsKeySchedule.FinishedVerifyData(suite.Hash, serverTraffic, transcriptHash, expected);
 
         if (body.Length != expected.Length || !CryptographicOperations.FixedTimeEquals(expected, body))
-            throw new RealityHandshakeException(
+            throw new RealityHandshakeException(ProxyErrorCode.AuthFailed,
                 "The server's Finished did not verify. The peer does not hold the private key for the " +
                 "key_share it sent, so the connection is not with the server we negotiated with.");
     }
@@ -348,13 +348,13 @@ internal sealed class RealityTlsClient
     private static void AssertRealityServer(byte[] certificate, ReadOnlySpan<byte> authKey, string serverName)
     {
         if (!TryReadEd25519Certificate(certificate, out byte[]? publicKey, out byte[]? signature))
-            throw new RealityHandshakeException(
+            throw new RealityHandshakeException(ProxyErrorCode.AuthFailed,
                 $"The peer presented an ordinary certificate for '{serverName}' rather than a REALITY one. " +
                 "The handshake was relayed to the real site, which means the server did not recognise our " +
                 "authentication — check the public key, the short id and the clock.");
 
         if (!RealityAuth.VerifyCertificate(authKey, publicKey, signature))
-            throw new RealityHandshakeException(
+            throw new RealityHandshakeException(ProxyErrorCode.AuthFailed,
                 "The peer's certificate is not bound to our REALITY shared secret. Refusing to tunnel: " +
                 "sending the proxy credentials now would hand them to whoever answered.");
     }
@@ -700,18 +700,35 @@ internal sealed class RealityTlsClient
 }
 
 /// <summary>Raised when a managed REALITY handshake cannot be completed.</summary>
-public sealed class RealityHandshakeException : Exception
+/// <remarks>
+/// A <see cref="ProxyProtocolException"/>, so a caller that already catches those and branches
+/// on <see cref="ProxyProtocolException.ErrorCode"/> sees REALITY failures too. Two codes are
+/// used: <see cref="ProxyErrorCode.AuthFailed"/> when the peer did not prove it is the server
+/// we configured — it relayed us to the decoy site, or its certificate is not bound to our
+/// shared secret — and <see cref="ProxyErrorCode.InvalidResponse"/> for everything else, which
+/// is the peer breaking TLS or sending something this client does not implement. The first is
+/// "check pbk, sid and sni"; the second is not something the caller can fix by reconfiguring.
+/// </remarks>
+public sealed class RealityHandshakeException : ProxyProtocolException
 {
-    /// <summary>Creates the exception.</summary>
+    /// <summary>Creates the exception with <see cref="ProxyErrorCode.InvalidResponse"/>.</summary>
     /// <param name="message">What went wrong.</param>
-    public RealityHandshakeException(string message) : base(message)
+    public RealityHandshakeException(string message) : base(ProxyErrorCode.InvalidResponse, message)
     {
     }
 
-    /// <summary>Creates the exception.</summary>
+    /// <summary>Creates the exception with an explicit code.</summary>
+    /// <param name="errorCode">Why, in terms a caller can branch on.</param>
+    /// <param name="message">What went wrong.</param>
+    public RealityHandshakeException(ProxyErrorCode errorCode, string message) : base(errorCode, message)
+    {
+    }
+
+    /// <summary>Creates the exception with <see cref="ProxyErrorCode.InvalidResponse"/>.</summary>
     /// <param name="message">What went wrong.</param>
     /// <param name="innerException">The underlying failure.</param>
-    public RealityHandshakeException(string message, Exception innerException) : base(message, innerException)
+    public RealityHandshakeException(string message, Exception innerException)
+        : base(ProxyErrorCode.InvalidResponse, message, innerException)
     {
     }
 }

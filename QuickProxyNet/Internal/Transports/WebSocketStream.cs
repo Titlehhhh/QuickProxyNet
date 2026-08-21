@@ -72,7 +72,9 @@ internal sealed class WebSocketStream : Stream
             }
             catch (WebSocketException ex)
             {
-                throw new ProxyProtocolException(ProxyErrorCode.TransportUpgradeFailed,
+                // The upgrade succeeded long ago; this is the tunnel itself breaking, which a
+                // caller should treat like any dropped connection rather than retry the upgrade.
+                throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
                     $"The WebSocket transport failed while reading: {ex.Message}", ex);
             }
 
@@ -102,7 +104,7 @@ internal sealed class WebSocketStream : Stream
         }
         catch (WebSocketException ex)
         {
-            throw new ProxyProtocolException(ProxyErrorCode.TransportUpgradeFailed,
+            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
                 $"The WebSocket transport failed while writing: {ex.Message}", ex);
         }
     }

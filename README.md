@@ -168,7 +168,9 @@ catch (ProxyProtocolException ex)
             // Proxy requires credentials (HTTP 407)
             break;
         case ProxyErrorCode.AuthFailed:
-            // Wrong username/password
+            // Wrong username/password; for REALITY, the server did not recognise our
+            // pbk/sid and relayed us to the decoy site; for VMess, the response was
+            // sealed under keys that are not ours
             break;
         case ProxyErrorCode.InvalidResponse:
             // Proxy returned garbage
@@ -178,6 +180,13 @@ catch (ProxyProtocolException ex)
     // ex.InnerException contains the original SocketException/IOException
 }
 ```
+
+The VPN-style protocols use the same type and codes. `RealityHandshakeException` is a
+`ProxyProtocolException`, so the `catch` above sees it. Two rejections that protocols express
+by simply closing the connection — a VLESS or VMess server that does not know the id — come
+back as `ConnectionFailed` with a message naming the protocol and what to check (for VMess:
+the id, a non-zero `alterId` on the server, and a clock more than ~2 minutes off). Error
+messages never contain the credential: a malformed user id is reported by length, not value.
 
 ### Error Codes
 

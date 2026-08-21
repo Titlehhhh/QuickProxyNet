@@ -290,8 +290,11 @@ public class TlsRecordStreamTest
 
         using var reader = new TlsRecordStream(new MemoryStream(wire));
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        // The peer's malformed record is a protocol failure the caller can catch as one, not an
+        // InvalidOperationException that reads as a bug in this library.
+        var ex = await Assert.ThrowsAsync<RealityHandshakeException>(async () =>
             await reader.ReadAsync(CancellationToken.None));
+        Assert.Equal(ProxyErrorCode.InvalidResponse, ex.ErrorCode);
     }
 
     /// <summary>An encrypted record shorter than its own tag is refused.</summary>
@@ -306,8 +309,11 @@ public class TlsRecordStreamTest
             Read = new TlsRecordProtection(suite, Secret(suite))
         };
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        // The peer's malformed record is a protocol failure the caller can catch as one, not an
+        // InvalidOperationException that reads as a bug in this library.
+        var ex = await Assert.ThrowsAsync<RealityHandshakeException>(async () =>
             await reader.ReadAsync(CancellationToken.None));
+        Assert.Equal(ProxyErrorCode.InvalidResponse, ex.ErrorCode);
     }
 
     /// <summary>A record that is all padding and no content type is refused.</summary>
@@ -339,8 +345,11 @@ public class TlsRecordStreamTest
             Read = new TlsRecordProtection(suite, secret)
         };
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        // The peer's malformed record is a protocol failure the caller can catch as one, not an
+        // InvalidOperationException that reads as a bug in this library.
+        var ex = await Assert.ThrowsAsync<RealityHandshakeException>(async () =>
             await reader.ReadAsync(CancellationToken.None));
+        Assert.Equal(ProxyErrorCode.InvalidResponse, ex.ErrorCode);
     }
 
     /// <summary>A tampered record does not open.</summary>
@@ -363,8 +372,9 @@ public class TlsRecordStreamTest
             Read = new TlsRecordProtection(suite, secret)
         };
 
-        await Assert.ThrowsAsync<AuthenticationTagMismatchException>(async () =>
+        var ex = await Assert.ThrowsAsync<RealityHandshakeException>(async () =>
             await reader.ReadAsync(CancellationToken.None));
+        Assert.IsType<AuthenticationTagMismatchException>(ex.InnerException);
     }
 
     /// <summary>A transport that ends mid-record reports end of stream.</summary>

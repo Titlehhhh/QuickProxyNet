@@ -181,7 +181,7 @@ public static class VmessShareLink
         if (!UuidCodec.TryWriteBigEndian(id, probe))
         {
             error =
-                $"VMess user id '{id}' is unusable: it is neither a canonical UUID nor a " +
+                $"VMess user id is unusable ({id.Length} characters): it is neither a canonical UUID nor a " +
                 "string of 1..30 characters (which would be mapped to a UUID).";
             return false;
         }
@@ -517,7 +517,7 @@ public static class VmessShareLink
             if (!UuidCodec.TryWriteBigEndian(id, probe))
             {
                 error =
-                    $"VMess user id '{id}' is unusable: it is neither a canonical UUID nor a " +
+                    $"VMess user id is unusable ({id.Length} characters): it is neither a canonical UUID nor a " +
                     "string of 1..30 characters (which would be mapped to a UUID).";
                 return false;
             }

@@ -982,7 +982,7 @@ public class VmessClientTest
         var ex = await Assert.ThrowsAsync<ProxyProtocolException>(
             async () => await body.ReadAsync(new byte[64]));
 
-        Assert.Equal(ProxyErrorCode.InvalidResponse, ex.ErrorCode);
+        Assert.Equal(ProxyErrorCode.AuthFailed, ex.ErrorCode);
     }
 
     [Fact]

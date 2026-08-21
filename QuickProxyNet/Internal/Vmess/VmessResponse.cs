@@ -163,6 +163,10 @@ internal static class VmessResponse
                 await stream.ReadExactlyAsync(lengthBlock.AsMemory(0, LengthBlockSize), cancellationToken);
                 headerLength = OpenLength(material, lengthBlock);
             }
+            catch (EndOfStreamException ex)
+            {
+                throw ClosedBeforeResponse(ex);
+            }
             finally
             {
                 ArrayPool<byte>.Shared.Return(lengthBlock, clearArray: true);
@@ -178,6 +182,10 @@ internal static class VmessResponse
             {
                 await stream.ReadExactlyAsync(buffer.AsMemory(0, sealedLength), cancellationToken);
                 return OpenHeader(material, buffer, headerLength, expectedResponseVerifier);
+            }
+            catch (EndOfStreamException ex)
+            {
+                throw ClosedBeforeResponse(ex);
             }
             finally
             {
@@ -216,12 +224,33 @@ internal static class VmessResponse
         }
         catch (CryptographicException ex)
         {
-            throw new ProxyProtocolException(ProxyErrorCode.InvalidResponse,
-                "VMess response header length block failed authentication.", ex);
+            // Same class of failure as a verifier mismatch below: the bytes were sealed under
+            // keys that are not ours, so whatever answered is not the session we requested.
+            throw new ProxyProtocolException(ProxyErrorCode.AuthFailed,
+                "VMess response header length block failed authentication: the response was " +
+                "produced with different keys, so the server rejected the request or something " +
+                "else answered in its place.", ex);
         }
 
         return BinaryPrimitives.ReadUInt16BigEndian(plaintext);
     }
+
+    /// <summary>
+    /// The error for a connection that ends before a response header arrives.
+    /// </summary>
+    /// <remarks>
+    /// This is the normal way a VMess server says no: an unknown AuthID — wrong id, a non-zero
+    /// alterId on the server, or clocks more than about two minutes apart — is simply dropped,
+    /// never answered. So the bare <see cref="EndOfStreamException"/> this replaces was the
+    /// library's most common rejection surfacing with no protocol name and no hint.
+    /// </remarks>
+    private static ProxyProtocolException ClosedBeforeResponse(EndOfStreamException inner) =>
+        new(ProxyErrorCode.ConnectionFailed,
+            "VMess server closed the connection before sending a response header. This is how " +
+            "a VMess server rejects a request it cannot authenticate: check the user id, that " +
+            "the server's alterId is 0 (VMessAEAD), and that this machine's clock is within " +
+            "about two minutes of the server's.",
+            inner);
 
     private static VmessResponseHeader OpenHeader(
         byte[] material, byte[] buffer, int headerLength, byte expectedResponseVerifier)
@@ -239,8 +268,10 @@ internal static class VmessResponse
         }
         catch (CryptographicException ex)
         {
-            throw new ProxyProtocolException(ProxyErrorCode.InvalidResponse,
-                "VMess response header failed authentication.", ex);
+            throw new ProxyProtocolException(ProxyErrorCode.AuthFailed,
+                "VMess response header failed authentication: the response was produced with " +
+                "different keys, so the server rejected the request or something else answered " +
+                "in its place.", ex);
         }
 
         if (plaintext[0] != expectedResponseVerifier)

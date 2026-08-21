@@ -74,7 +74,7 @@ public static class VlessShareLink
         if (!UuidCodec.TryWriteBigEndian(id, probe))
         {
             error =
-                $"VLESS user id '{id}' is unusable: it is neither a canonical UUID nor a " +
+                $"VLESS user id is unusable ({id.Length} characters): it is neither a canonical UUID nor a " +
                 "string of 1..30 characters (which would be mapped to a UUID).";
             return false;
         }
