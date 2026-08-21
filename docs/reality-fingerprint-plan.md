@@ -1,6 +1,6 @@
 # Making the managed REALITY ClientHello look like Chrome
 
-`QuickProxyNet.Reality/Managed/TlsClientHello.cs` currently emits a valid TLS 1.3 hello that a
+`QuickProxyNet/Internal/Reality/TlsClientHello.cs` currently emits a valid TLS 1.3 hello that a
 real REALITY server accepts. It is not a browser fingerprint, and until it is, the managed client
 is a protocol implementation rather than a censorship-resistance tool — a hello that merely
 *works* puts its user in a smaller and stranger bucket than one that fails.

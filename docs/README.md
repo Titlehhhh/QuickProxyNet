@@ -20,7 +20,7 @@ Wire-level заметки по протоколам:
 - [План реализации](implementation-plan.md) — что сделано, что дальше, и замеры
   покрытия по реальному корпусу ссылок
 - [Достоверность отпечатка REALITY](reality-fingerprint-plan.md) — побайтовый
-  разбор ClientHello Chrome 133 и план работ; относится к `QuickProxyNet.Reality`
+  разбор ClientHello Chrome 133 и план работ; относится к `QuickProxyNet/Internal/Reality/`
 
 Наличие документа не означает, что протокол поддержан: там, где поддержки нет,
 это сказано явно.

@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
-using QuickProxyNet.Reality.Managed;
+using QuickProxyNet.Reality;
 
 namespace QuickProxyNet.Tests;
 

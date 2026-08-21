@@ -3,7 +3,7 @@ using System.Buffers.Binary;
 using System.Formats.Asn1;
 using System.Security.Cryptography;
 
-namespace QuickProxyNet.Reality.Managed;
+namespace QuickProxyNet.Reality;
 
 /// <summary>Settings for a managed REALITY handshake.</summary>
 internal sealed class RealityTlsOptions

@@ -89,22 +89,60 @@ Also not implemented: Vision's TLS-in-TLS splice. It is a throughput optimizatio
 
 ## What's supported, what's not
 
-Percentages are measured by this library's own parsers over a real-world corpus of 20 228 share links (snapshot of 2026-08-21; the list changes daily, so treat these as proportions, not constants).
+### Protocols
+
+| Protocol | Status | Notes |
+|---|---|---|
+| HTTP / HTTPS `CONNECT` | Supported | optional basic auth |
+| SOCKS4 / SOCKS4a / SOCKS5 | Supported | SOCKS5 with optional username/password auth |
+| VLESS | Supported | `security=none`, `tls`, `reality`; flow `xtls-rprx-vision` |
+| Trojan | Supported | over TLS |
+| VMess | Supported | VMessAEAD, `alterId=0`, optional TLS |
+| Hysteria2 / TUIC | **Not supported** | QUIC-based; the library has no datagram model |
+| Shadowsocks | **Not supported** | — |
+
+### Transports
+
+| Transport | Status |
+|---|---|
+| `tcp` / `raw` | Supported |
+| `ws` / `websocket` | Supported |
+| `httpupgrade` | Supported |
+| `grpc` | **Not supported** — needs an HTTP/2 layer |
+| `xhttp` | **Not supported** — needs HTTP/2/3 |
+
+### VLESS security and flow
+
+| | Status |
+|---|---|
+| `security=none` | Supported |
+| `security=tls` | Supported — `SslStream` |
+| `security=reality` | Supported — managed TLS 1.3, no external binary |
+| `flow` empty | Supported |
+| `flow=xtls-rprx-vision` | Supported — padding protocol both ways; TLS-in-TLS splice not implemented |
+| `flow=xtls-rprx-vision-udp443` | **Not supported** |
+| Browser-grade ClientHello fingerprint | **Not implemented** — see the REALITY section above |
+
+### How much of the real world that covers
+
+Measured by this library's own parsers over a corpus of 20 228 share links (snapshot of
+2026-08-21; the list changes daily, so these are proportions, not constants).
 
 | | Share of corpus | Status |
 |---|---|---|
-| Plain VLESS / VMess / Trojan (`tcp`, `ws`, `httpupgrade`) | 41% | Works in-process |
-| VLESS REALITY (incl. `xtls-rprx-vision`) | 46% | Works in-process |
-| `grpc` transport | 6.0% | Not supported in-process — use `QuickProxyNet.Reality` |
-| Hysteria2 | 2.9% | No client — QUIC/datagram model doesn't fit the library's `Stream` model |
-| `xhttp` transport | 2.9% | Not supported in-process — use `QuickProxyNet.Reality` |
+| Plain VLESS / VMess / Trojan (`tcp`, `ws`, `httpupgrade`) | 41% | Works |
+| VLESS REALITY, incl. `xtls-rprx-vision` | 46% | Works |
+| `grpc` transport | 6.0% | Not supported |
+| Hysteria2 | 2.9% | Not supported |
+| `xhttp` transport | 2.9% | Not supported |
 | `xtls-rprx-vision-udp443` flow | 0.1% | Not supported |
 
 UDP is not supported as a class: the whole library is built around `ConnectAsync(...) -> Stream`.
 
-### The `QuickProxyNet.Reality` package
-
-The companion package no longer exists "for REALITY" — that moved into the core. It now covers what the managed stack cannot do yet: the `grpc` and `xhttp` transports, Vision's TLS-in-TLS splice, and a genuine uTLS browser fingerprint, by driving a child Xray process. You bring the Xray binary.
+There is no companion package and no optional binary. An earlier `QuickProxyNet.Reality` package
+drove a child Xray process to reach REALITY; it was removed once the managed implementation was
+verified against live servers. What it also covered — `grpc`, `xhttp`, a real uTLS fingerprint —
+is listed above as unsupported rather than quietly delegated.
 
 ## Error Handling
 

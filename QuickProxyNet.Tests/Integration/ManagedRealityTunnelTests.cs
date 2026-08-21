@@ -1,7 +1,6 @@
 using System.Net.Sockets;
 using System.Text;
 using QuickProxyNet.Reality;
-using QuickProxyNet.Reality.Managed;
 
 namespace QuickProxyNet.Tests.Integration;
 
@@ -21,7 +20,7 @@ namespace QuickProxyNet.Tests.Integration;
 /// </remarks>
 public class ManagedRealityTunnelTests
 {
-    private static string Executable => Environment.GetEnvironmentVariable(RealityProxyOptions.ExecutablePathVariable)!;
+    private static string Executable => Environment.GetEnvironmentVariable(LocalRealityServer.ExecutablePathVariable)!;
 
     private static byte[] Base64Url(string value)
     {
@@ -73,7 +72,7 @@ public class ManagedRealityTunnelTests
     /// <summary>
     /// The end of the road: bytes go out through managed REALITY and the answer comes back.
     /// </summary>
-    [EnvFact(RealityProxyOptions.ExecutablePathVariable)]
+    [EnvFact(LocalRealityServer.ExecutablePathVariable)]
     public async Task ManagedReality_CarriesVlessToATarget()
     {
         using LoopbackEchoServer echo = LoopbackEchoServer.Start();
@@ -89,7 +88,7 @@ public class ManagedRealityTunnelTests
     /// A payload larger than one TLS record, to prove records are split and reassembled rather
     /// than silently truncated at the 16 KiB boundary.
     /// </summary>
-    [EnvFact(RealityProxyOptions.ExecutablePathVariable)]
+    [EnvFact(LocalRealityServer.ExecutablePathVariable)]
     public async Task ManagedReality_CarriesPayloadsAcrossRecordBoundaries()
     {
         using LoopbackEchoServer echo = LoopbackEchoServer.Start();
@@ -108,7 +107,7 @@ public class ManagedRealityTunnelTests
     /// <summary>
     /// Several tunnels over separate connections, to catch state that leaks between handshakes.
     /// </summary>
-    [EnvFact(RealityProxyOptions.ExecutablePathVariable)]
+    [EnvFact(LocalRealityServer.ExecutablePathVariable)]
     public async Task ManagedReality_SupportsSequentialTunnels()
     {
         using LoopbackEchoServer echo = LoopbackEchoServer.Start();
@@ -133,7 +132,7 @@ public class ManagedRealityTunnelTests
     /// asserts against, so the assertion has to be on the exact body, not on "some bytes came
     /// back".
     /// </remarks>
-    [EnvFact(RealityProxyOptions.ExecutablePathVariable)]
+    [EnvFact(LocalRealityServer.ExecutablePathVariable)]
     public async Task ManagedReality_WithVisionFlow_CarriesVlessToATarget()
     {
         using LoopbackEchoServer echo = LoopbackEchoServer.Start();
@@ -150,7 +149,7 @@ public class ManagedRealityTunnelTests
     /// Vision again, with a response too large to fit the padded frames — the part a client that
     /// only unwraps the first frame gets wrong.
     /// </summary>
-    [EnvFact(RealityProxyOptions.ExecutablePathVariable)]
+    [EnvFact(LocalRealityServer.ExecutablePathVariable)]
     public async Task ManagedReality_WithVisionFlow_CarriesPayloadsPastTheFramedPrefix()
     {
         using LoopbackEchoServer echo = LoopbackEchoServer.Start();

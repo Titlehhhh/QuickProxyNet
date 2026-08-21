@@ -17,6 +17,5 @@
     </ItemGroup>
     <ItemGroup>
         <ProjectReference Include="..\QuickProxyNet\QuickProxyNet.csproj"/>
-        <ProjectReference Include="..\QuickProxyNet.Reality\QuickProxyNet.Reality.csproj"/>
     </ItemGroup>
 </Project>

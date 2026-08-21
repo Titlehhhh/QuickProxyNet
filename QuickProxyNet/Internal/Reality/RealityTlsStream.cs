@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace QuickProxyNet.Reality.Managed;
+namespace QuickProxyNet.Reality;
 
 /// <summary>
 /// The application-data stream of a completed managed REALITY handshake.

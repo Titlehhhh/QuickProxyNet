@@ -4,7 +4,7 @@ High-performance, zero-dependency C# library for connecting through HTTP, HTTPS,
 
 VLESS REALITY works in-process — the TLS 1.3 handshake it needs is implemented here (including the `xtls-rprx-vision` flow), so it costs no extra package and no external binary, and the zero-dependency promise still holds. Its ClientHello is not yet a browser fingerprint; see `docs/reality-fingerprint-plan.md` in the repository for what that means.
 
-The separate `QuickProxyNet.Reality` package is now only for what a child Xray process still buys: the `grpc`/`xhttp` transports, Vision's TLS-in-TLS splice, and a genuine uTLS fingerprint.
+No companion package and no external binary are involved. The `grpc` and `xhttp` transports, Vision's TLS-in-TLS splice, and a genuine uTLS browser fingerprint are not implemented.
 
 **Targets:** .NET 8 / .NET 9 / .NET 10 / .NET 11
 

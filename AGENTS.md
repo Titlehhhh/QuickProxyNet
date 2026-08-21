@@ -6,11 +6,10 @@ QuickProxyNet is a high-performance C#/.NET library for opening direct `Stream`
 connections through proxy protocols. It covers the classic proxy family (HTTP,
 HTTPS, SOCKS4, SOCKS4a, SOCKS5) and the VPN-style family (VLESS, Trojan, VMess).
 
-A second package, `QuickProxyNet.Reality`, adds VLESS REALITY. It is separate on
-purpose: the core keeps its zero-dependency promise, and opting into REALITY is an
-explicit choice. See "The REALITY Package" below.
+VLESS REALITY, with the `xtls-rprx-vision` flow, is part of the core: a managed
+TLS 1.3 client, no external binary, no extra package. See "REALITY" below.
 
-- NuGet packages: `QuickProxyNet`, `QuickProxyNet.Reality`
+- NuGet package: `QuickProxyNet`
 - Author: Titlehhhh
 - License: MIT
 - Core targets: `net8.0`, `net9.0`, `net10.0`, `net11.0`
@@ -19,7 +18,6 @@ explicit choice. See "The REALITY Package" below.
 
 ```text
 QuickProxyNet/            Core library and protocol logic
-QuickProxyNet.Reality/    VLESS REALITY: a managed client, plus an Xray-driven one
 QuickProxyNet.Tests/      xUnit tests
 QuickProxyNet.Benchmarks/ BenchmarkDotNet benchmarks
 Sample/                   Console usage example
@@ -48,10 +46,9 @@ All public library types live in the `QuickProxyNet` namespace.
 - `VlessOptions` / `TrojanOptions` / `VmessOptions` plus the matching
   `*ShareLink.Parse` / `TryParse` describe a VPN-style endpoint.
 
-In `QuickProxyNet.Reality`: `RealityProxy` (an `IAsyncDisposable` owning one Xray
-process and one loopback port), `RealityProxyOptions`, and `RealityHandshakeException`.
-The managed stack under `Managed/` is still `internal` — see the open question at the
-end of this file.
+REALITY lives in `QuickProxyNet/Internal/Reality/` and is reached through
+`VlessClient` like any other security mode; `RealityHandshakeException` is the one
+public type it adds.
 
 ## Current Protocol Implementations
 
@@ -62,10 +59,9 @@ end of this file.
 | `Socks4Client` | SOCKS4 |
 | `Socks4aClient` | SOCKS4a |
 | `Socks5Client` | SOCKS5 with optional username/password auth |
-| `VlessClient` | VLESS, `security=none` or `tls` |
+| `VlessClient` | VLESS, `security=none`, `tls` or `reality`, with or without `xtls-rprx-vision` |
 | `TrojanClient` | Trojan over TLS |
 | `VmessClient` | VMess (VMessAEAD, `alterId=0`), optional TLS |
-| `RealityProxy` | VLESS REALITY and XTLS Vision, via a local Xray process (separate package) |
 
 All three run over any of three transports: `tcp`/`raw`, `ws`/`websocket`, `httpupgrade`.
 `grpc`, `xhttp` and `h2` are rejected with `NotSupportedException` before any byte is
@@ -98,41 +94,41 @@ Internal/Vmess/VmessResponseStream.cs  lazy response-header reader
 Internal/Vmess/VmessStream.cs     AEAD chunk framing
 ```
 
-## The REALITY Package
+## REALITY
 
-`QuickProxyNet.Reality` exists because REALITY cannot be done in the core library:
-it authenticates by hiding a key exchange inside the TLS `session_id` of a
+REALITY authenticates by hiding a key exchange inside the TLS `session_id` of a
 ClientHello that must look like a browser's, and `SslStream` hands the handshake to
-Schannel or OpenSSL with no way to author those bytes. There are two
-implementations, and they answer different questions.
+Schannel or OpenSSL with no way to author those bytes. So the handshake is written
+here, in `QuickProxyNet/Internal/Reality/`:
 
 ```text
-RealityProxy.cs          Drives a local Xray process with a loopback SOCKS5 inbound
-RealityProxyOptions.cs   Where to find the binary, what to bind, how much to log
-XrayClientConfig.cs      VlessOptions -> Xray JSON, handed over on stdin
-XrayExecutable.cs        Explicit path -> QPN_XRAY_PATH -> PATH
-
-Managed/X25519.cs           RFC 7748, because net8-net10 have no X25519 anywhere
-Managed/RealityAuth.cs      authKey derivation, session_id sealing, the certificate HMAC
-Managed/TlsKeySchedule.cs   RFC 8446 §7.1 and §7.3
-Managed/TlsRecordLayer.cs   Suites, record protection, record read/write
-Managed/TlsWriter.cs        TLS's length-prefixed vectors, with backpatching
-Managed/TlsClientHello.cs   The hello — NOT yet a browser fingerprint, see below
-Managed/RealityTlsClient.cs The handshake state machine
-Managed/RealityTlsStream.cs Application data over the record layer
+X25519.cs           RFC 7748, because net8-net10 have no X25519 anywhere
+RealityAuth.cs      authKey derivation, session_id sealing, the certificate HMAC
+TlsKeySchedule.cs   RFC 8446 §7.1 and §7.3
+TlsRecordLayer.cs   Suites, record protection, record read/write
+TlsWriter.cs        TLS's length-prefixed vectors, with backpatching
+TlsClientHello.cs   The hello — NOT yet a browser fingerprint, see below
+RealityTlsClient.cs The handshake state machine
+RealityTlsStream.cs Application data over the record layer
 ```
 
-The Xray path ships nothing: the binary is the caller's, supplied through
-`RealityProxyOptions.ExecutablePath`, `QPN_XRAY_PATH`, or `PATH`. Its configuration
-goes to Xray on **stdin** (`run -c stdin:`) so the VLESS id never reaches disk.
+`VisionStream` (in `Internal/`) carries the `xtls-rprx-vision` padding protocol, which
+the great majority of deployed REALITY nodes require. Its TLS-in-TLS splice is not
+implemented: that is throughput, not wire format.
+
+An earlier `QuickProxyNet.Reality` package drove a child Xray process to do all this.
+It was deleted once the managed path was proven against real servers — it was never
+published, and keeping a second implementation alive to cover a shrinking gap costs
+more than the gap. `grpc`, `xhttp` and a genuine uTLS fingerprint went with it; they
+are listed as unsupported rather than delegated.
 
 The managed path completes a real handshake against Xray-core and carries VLESS, with
 no external process. What it is not, yet, is a fingerprint: the hello it emits has no
 GREASE, no padding, an arbitrary extension order and a bare X25519 `key_share`, where
 Chrome sends about 1.7 KB with `X25519MLKEM768`. **That gap is a correctness problem,
 not polish** — a client whose hello merely works matches no deployed browser and so
-puts its user in a smaller, stranger bucket than one that fails. Until it closes, the
-managed path is a protocol implementation, and the type says so in its own docs.
+puts its user in a smaller, stranger bucket than one that fails. Until it closes,
+REALITY here is a protocol implementation, and the type says so in its own docs.
 `docs/reality-fingerprint-plan.md` has the byte-level detail and the staged plan.
 
 Testing follows the same rule as the rest of the repo — prove it against something

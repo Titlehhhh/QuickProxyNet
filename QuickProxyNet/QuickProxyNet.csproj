@@ -11,7 +11,7 @@
         <PackageId>QuickProxyNet</PackageId>
         <Authors>Titlehhhh</Authors>
         <Company>Titlehhhh</Company>
-        <Description>QuickProxyNet is a high-performance, zero-dependency .NET library for connecting to servers via HTTP, HTTPS, SOCKS4, SOCKS4a and SOCKS5 proxies, and via the VPN-style protocols VLESS, VMess and Trojan over tcp, ws or httpupgrade. Provides direct Stream access for low-level network operations. VLESS REALITY is available in the QuickProxyNet.Reality package.</Description>
+        <Description>QuickProxyNet is a high-performance, zero-dependency .NET library for connecting to servers via HTTP, HTTPS, SOCKS4, SOCKS4a and SOCKS5 proxies, and via the VPN-style protocols VLESS, VMess and Trojan over tcp, ws or httpupgrade. Provides direct Stream access for low-level network operations. VLESS REALITY and the xtls-rprx-vision flow are implemented in managed code, with no external binary.</Description>
         <PackageTags>proxy;networking;http;socks;vless;vmess;trojan;high-performance</PackageTags>
         <Copyright>Copyright © Titlehhhh 2024</Copyright>
         <RepositoryUrl>https://github.com/Titlehhhh/QuickProxyNet</RepositoryUrl>

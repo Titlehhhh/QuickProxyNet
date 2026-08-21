@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using QuickProxyNet.Reality;
 
 namespace QuickProxyNet.Tests.Integration;
 
@@ -66,7 +65,7 @@ public class LargeRequestDiagnosticTests
     [InlineData(16_000)]
     public async Task Socks5_HandlesLargeRequests(int padding)
     {
-        string executable = Environment.GetEnvironmentVariable(RealityProxyOptions.ExecutablePathVariable)!;
+        string executable = Environment.GetEnvironmentVariable(LocalRealityServer.ExecutablePathVariable)!;
         if (string.IsNullOrEmpty(executable))
             return;
 

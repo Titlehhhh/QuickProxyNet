@@ -1,4 +1,4 @@
-namespace QuickProxyNet.Reality.Managed;
+namespace QuickProxyNet.Reality;
 
 /// <summary>
 /// A minimal writer for TLS's length-prefixed wire format.

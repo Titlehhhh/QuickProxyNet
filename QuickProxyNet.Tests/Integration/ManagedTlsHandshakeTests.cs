@@ -1,6 +1,5 @@
 using System.Net.Sockets;
 using QuickProxyNet.Reality;
-using QuickProxyNet.Reality.Managed;
 
 namespace QuickProxyNet.Tests.Integration;
 
@@ -15,7 +14,7 @@ namespace QuickProxyNet.Tests.Integration;
 /// </remarks>
 public class ManagedTlsHandshakeTests
 {
-    private static string Executable => Environment.GetEnvironmentVariable(RealityProxyOptions.ExecutablePathVariable)!;
+    private static string Executable => Environment.GetEnvironmentVariable(LocalRealityServer.ExecutablePathVariable)!;
 
     private static byte[] Base64Url(string value)
     {
@@ -43,7 +42,7 @@ public class ManagedTlsHandshakeTests
     /// The milestone: a TLS 1.3 handshake written from scratch, authenticated by REALITY,
     /// completed against the reference server.
     /// </summary>
-    [EnvFact(RealityProxyOptions.ExecutablePathVariable)]
+    [EnvFact(LocalRealityServer.ExecutablePathVariable)]
     public async Task ManagedHandshake_CompletesAgainstXray()
     {
         await using LocalRealityServer server = await LocalRealityServer.StartAsync(Executable, show: true);
@@ -69,7 +68,7 @@ public class ManagedTlsHandshakeTests
     /// that cannot tell the REALITY server from the borrowed site would send the VLESS id to
     /// whatever answered.
     /// </remarks>
-    [EnvFact(RealityProxyOptions.ExecutablePathVariable)]
+    [EnvFact(LocalRealityServer.ExecutablePathVariable)]
     public async Task WrongPublicKey_IsRefusedRatherThanTunnelled()
     {
         await using LocalRealityServer server = await LocalRealityServer.StartAsync(Executable, show: true);
@@ -88,7 +87,7 @@ public class ManagedTlsHandshakeTests
     /// <summary>
     /// A short id the server does not know must fail the same way: relayed to the decoy, refused.
     /// </summary>
-    [EnvFact(RealityProxyOptions.ExecutablePathVariable)]
+    [EnvFact(LocalRealityServer.ExecutablePathVariable)]
     public async Task UnknownShortId_IsRefused()
     {
         await using LocalRealityServer server = await LocalRealityServer.StartAsync(Executable, show: true);
@@ -104,7 +103,7 @@ public class ManagedTlsHandshakeTests
     /// Two handshakes in a row must both succeed: the ephemeral key, the client random and the
     /// timestamp all change per connection, and a stale value anywhere would show up here.
     /// </summary>
-    [EnvFact(RealityProxyOptions.ExecutablePathVariable)]
+    [EnvFact(LocalRealityServer.ExecutablePathVariable)]
     public async Task RepeatedHandshakes_AllSucceed()
     {
         await using LocalRealityServer server = await LocalRealityServer.StartAsync(Executable, show: true);

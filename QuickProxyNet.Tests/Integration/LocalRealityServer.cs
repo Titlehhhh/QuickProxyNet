@@ -32,6 +32,17 @@ namespace QuickProxyNet.Tests.Integration;
 /// </remarks>
 public sealed class LocalRealityServer : IAsyncDisposable
 {
+    /// <summary>
+    /// Environment variable naming the Xray binary these tests run as a <b>server</b>.
+    /// </summary>
+    /// <remarks>
+    /// Xray is no longer part of the library in any form — the client speaks REALITY itself.
+    /// It survives here as the reference implementation to test against, which is the only
+    /// role in which an outside binary is worth its weight: proof that our handshake is
+    /// accepted by the thing everyone else runs. Tests that need it skip when it is unset.
+    /// </remarks>
+    public const string ExecutablePathVariable = "QPN_XRAY_PATH";
+
     /// <summary>Generated with <c>xray x25519</c> for this suite; never guarded anything real.</summary>
     public const string PrivateKey = "iGNiP2EaAhjXIfaoiF34sn1_mKKSeO01YdhN46G7xn0";
 

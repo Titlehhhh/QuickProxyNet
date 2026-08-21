@@ -1,6 +1,5 @@
 using System.Net.Sockets;
 using QuickProxyNet.Reality;
-using QuickProxyNet.Reality.Managed;
 
 namespace QuickProxyNet.Tests.Integration;
 
@@ -23,7 +22,7 @@ namespace QuickProxyNet.Tests.Integration;
 /// </remarks>
 public class ManagedRealityHandshakeTests
 {
-    private static string Executable => Environment.GetEnvironmentVariable(RealityProxyOptions.ExecutablePathVariable)!;
+    private static string Executable => Environment.GetEnvironmentVariable(LocalRealityServer.ExecutablePathVariable)!;
 
     /// <summary>Xray's own version triple; the server may gate on a minimum.</summary>
     private static ReadOnlySpan<byte> ClientVersion => [26, 3, 27];
@@ -97,7 +96,7 @@ public class ManagedRealityHandshakeTests
     /// <summary>
     /// The milestone test: a ClientHello built entirely in managed code authenticates to Xray.
     /// </summary>
-    [EnvFact(RealityProxyOptions.ExecutablePathVariable)]
+    [EnvFact(LocalRealityServer.ExecutablePathVariable)]
     public async Task HandBuiltClientHello_AuthenticatesToXray()
     {
         await using LocalRealityServer server = await LocalRealityServer.StartAsync(Executable, show: true);
@@ -119,7 +118,7 @@ public class ManagedRealityHandshakeTests
     /// Without this, the test above could pass for the wrong reason: if the server logged
     /// acceptance regardless of what we sent, it would prove nothing about our sealing.
     /// </remarks>
-    [EnvFact(RealityProxyOptions.ExecutablePathVariable)]
+    [EnvFact(LocalRealityServer.ExecutablePathVariable)]
     public async Task UnknownShortId_IsNotAccepted()
     {
         await using LocalRealityServer server = await LocalRealityServer.StartAsync(Executable, show: true);
@@ -135,7 +134,7 @@ public class ManagedRealityHandshakeTests
     /// <summary>
     /// A hello for an SNI the server does not serve must not even reach the auth path.
     /// </summary>
-    [EnvFact(RealityProxyOptions.ExecutablePathVariable)]
+    [EnvFact(LocalRealityServer.ExecutablePathVariable)]
     public async Task UnknownServerName_IsNotAccepted()
     {
         await using LocalRealityServer server = await LocalRealityServer.StartAsync(Executable, show: true);
