@@ -1,16 +1,22 @@
 using System.Net.Security;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
+using QuickProxyNet.Reality.Managed;
 
 namespace QuickProxyNet;
 
 /// <summary>
-/// Connects to a target host through a VLESS proxy. Supports <c>security=none</c> (plain
-/// TCP) and <c>security=tls</c> (over <see cref="SslStream"/>), each over the
-/// <c>tcp</c>/<c>raw</c>, <c>ws</c> or <c>httpupgrade</c> transport. REALITY, non-empty
-/// <c>flow</c>, and the remaining transports are rejected with
-/// <see cref="NotSupportedException"/>.
+/// Connects to a target host through a VLESS proxy. Supports <c>security=none</c> (plain TCP),
+/// <c>security=tls</c> (over <see cref="SslStream"/>) and <c>security=reality</c> (over this
+/// library's own TLS 1.3), with or without <c>flow=xtls-rprx-vision</c>, each over the
+/// <c>tcp</c>/<c>raw</c>, <c>ws</c> or <c>httpupgrade</c> transport. Other flows and the
+/// remaining transports are rejected with <see cref="NotSupportedException"/>.
 /// </summary>
+/// <remarks>
+/// REALITY needs no external process and no Xray binary: the handshake is
+/// <see cref="RealityTlsClient"/>, in-process. What it does <b>not</b> yet do is look like a
+/// browser on the wire — see <c>TlsClientHello</c> for why that matters and what is missing.
+/// </remarks>
 public sealed class VlessClient : ProxyClient
 {
     private readonly List<SslApplicationProtocol>? _alpn;
@@ -82,6 +88,12 @@ public sealed class VlessClient : ProxyClient
                 layered = ssl;
                 await ssl.AuthenticateAsClientAsync(BuildSslOptions(), cancellationToken).ConfigureAwait(false);
             }
+            else if (Options.Security == VlessSecurity.Reality)
+            {
+                layered = await RealityTlsClient
+                    .HandshakeAsync(layered, BuildRealityOptions(), cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             layered = await ProxyTransport.ApplyAsync(
                 transport,
@@ -108,15 +120,48 @@ public sealed class VlessClient : ProxyClient
                 $"VLESS transport '{Options.Transport}' is not supported; 'tcp'/'raw', 'ws' and " +
                 "'httpupgrade' are implemented.");
 
-        if (Options.Security == VlessSecurity.Reality)
+        if (Options.Security == VlessSecurity.Reality && string.IsNullOrEmpty(Options.RealityPublicKey))
             throw new NotSupportedException(
-                "VLESS REALITY is not supported: it requires a uTLS ClientHello fingerprint that SslStream cannot produce.");
+                "VLESS REALITY needs the server's public key ('pbk' in the share link); this configuration has none.");
 
-        if (!string.IsNullOrEmpty(Options.Flow))
+        if (!string.IsNullOrEmpty(Options.Flow) && !VlessHelper.IsVision(Options.Flow))
             throw new NotSupportedException(
-                $"VLESS flow '{Options.Flow}' (XTLS) is not supported in this release.");
+                $"VLESS flow '{Options.Flow}' is not supported; '{VisionStream.FlowName}' is the only XTLS flow implemented.");
 
         return transport;
+    }
+
+    /// <summary>
+    /// Translates the share link's REALITY fields into handshake options.
+    /// </summary>
+    /// <remarks>
+    /// The ALPN default matches what Xray's own client offers when a link names none. It is not
+    /// cosmetic: the value is covered by the ClientHello the server authenticates against, and a
+    /// list nobody else sends is one more way to stand out.
+    /// </remarks>
+    private RealityTlsOptions BuildRealityOptions() => new()
+    {
+        ServerName = Options.Sni ?? Options.HostHeader ?? Options.Host,
+        PublicKey = DecodeBase64Url(Options.RealityPublicKey!),
+        ShortId = string.IsNullOrEmpty(Options.RealityShortId) ? null : Options.RealityShortId,
+        Alpn = Options.Alpn is { Count: > 0 } ? Options.Alpn : ["h2", "http/1.1"]
+    };
+
+    /// <summary>Decodes the unpadded base64url that share links carry <c>pbk</c> in.</summary>
+    private static byte[] DecodeBase64Url(string value)
+    {
+        string padded = value.Replace('-', '+').Replace('_', '/');
+        padded += (padded.Length % 4) switch { 2 => "==", 3 => "=", _ => "" };
+
+        try
+        {
+            return Convert.FromBase64String(padded);
+        }
+        catch (FormatException ex)
+        {
+            throw new NotSupportedException(
+                $"The REALITY public key '{value}' is not valid base64url.", ex);
+        }
     }
 
     private SslClientAuthenticationOptions BuildSslOptions() => new()

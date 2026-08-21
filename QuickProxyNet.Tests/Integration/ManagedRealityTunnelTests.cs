@@ -32,7 +32,7 @@ public class ManagedRealityTunnelTests
 
     /// <summary>Opens a VLESS tunnel to <paramref name="targetPort"/> over managed REALITY.</summary>
     private static async Task<Stream> OpenTunnelAsync(
-        LocalRealityServer server, int targetPort, CancellationToken cancellationToken)
+        LocalRealityServer server, int targetPort, CancellationToken cancellationToken, string? flow = null)
     {
         var tcp = new TcpClient();
         await tcp.ConnectAsync("127.0.0.1", server.Port, cancellationToken);
@@ -52,7 +52,8 @@ public class ManagedRealityTunnelTests
             Id = LocalRealityServer.Id,
             Host = "127.0.0.1",
             Port = server.Port,
-            Security = VlessSecurity.Reality
+            Security = VlessSecurity.Reality,
+            Flow = flow
         };
 
         return await VlessHelper.EstablishVlessTunnelAsync(tls, vless, "127.0.0.1", targetPort, cancellationToken);
@@ -120,5 +121,47 @@ public class ManagedRealityTunnelTests
 
             Assert.Contains(LoopbackEchoServer.Body, await GetAsync(tunnel, "/", timeout.Token));
         }
+    }
+
+    /// <summary>
+    /// The same tunnel against a server whose user requires <c>xtls-rprx-vision</c> — the
+    /// configuration almost every REALITY node in the wild uses.
+    /// </summary>
+    /// <remarks>
+    /// Without the flow in the addons, Xray drops the connection outright; with the flow but no
+    /// unpadding, the response arrives wrapped in padding frames. Both failures are what this
+    /// asserts against, so the assertion has to be on the exact body, not on "some bytes came
+    /// back".
+    /// </remarks>
+    [EnvFact(RealityProxyOptions.ExecutablePathVariable)]
+    public async Task ManagedReality_WithVisionFlow_CarriesVlessToATarget()
+    {
+        using LoopbackEchoServer echo = LoopbackEchoServer.Start();
+        await using LocalRealityServer server = await LocalRealityServer.StartAsync(Executable, VisionStream.FlowName);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        await using Stream tunnel =
+            await OpenTunnelAsync(server, echo.Port, timeout.Token, VisionStream.FlowName);
+
+        Assert.Contains(LoopbackEchoServer.Body, await GetAsync(tunnel, "/", timeout.Token));
+    }
+
+    /// <summary>
+    /// Vision again, with a response too large to fit the padded frames — the part a client that
+    /// only unwraps the first frame gets wrong.
+    /// </summary>
+    [EnvFact(RealityProxyOptions.ExecutablePathVariable)]
+    public async Task ManagedReality_WithVisionFlow_CarriesPayloadsPastTheFramedPrefix()
+    {
+        using LoopbackEchoServer echo = LoopbackEchoServer.Start();
+        await using LocalRealityServer server = await LocalRealityServer.StartAsync(Executable, VisionStream.FlowName);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        await using Stream tunnel =
+            await OpenTunnelAsync(server, echo.Port, timeout.Token, VisionStream.FlowName);
+
+        string response = await GetAsync(tunnel, "/" + new string('a', 40_000), timeout.Token);
+
+        Assert.Contains(LoopbackEchoServer.Body, response);
     }
 }

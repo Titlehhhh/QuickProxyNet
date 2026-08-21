@@ -257,10 +257,39 @@ public class VlessTest
         Assert.Equal("PUBKEY", o.RealityPublicKey);
         Assert.Equal("ab12", o.RealityShortId);
         Assert.Equal("xtls-rprx-vision", o.Flow);
+    }
 
-        // And the client must refuse it loudly rather than connecting in the clear.
-        Assert.Throws<NotSupportedException>(() => new VlessClient(o).ConnectAsync(
-            new MemoryStream(), "example.com", 443).AsTask().GetAwaiter().GetResult());
+    /// <summary>
+    /// The escaped link having parsed as REALITY is only half the guarantee. The other half is
+    /// that connecting actually starts a TLS handshake — the failure this guards against is the
+    /// UUID going out in cleartext to a server expecting REALITY.
+    /// </summary>
+    [Fact]
+    public void HtmlEscapedRealityLink_StartsATlsHandshake_NotACleartextRequest()
+    {
+        // A syntactically real key, so the handshake gets as far as writing a ClientHello.
+        const string PublicKey = "BhsV4NiigG9rrk98hJnJHPJ7TQ6Iy1WqUykGF0z9I2g";
+        var o = VlessShareLink.Parse(
+            $"vless://{Uuid}@example.com:443?type=tcp&amp;security=reality&amp;pbk={PublicKey}" +
+            "&amp;sid=ab12&amp;sni=www.example.org");
+
+        Assert.Equal(VlessSecurity.Reality, o.Security);
+
+        // A MemoryStream answers every read with "end of stream", so the handshake cannot
+        // complete — but what was written before it failed is the point.
+        var transport = new MemoryStream();
+        Assert.ThrowsAny<Exception>(() =>
+            new VlessClient(o).ConnectAsync(transport, "example.com", 443).AsTask().GetAwaiter().GetResult());
+
+        byte[] written = transport.ToArray();
+        Assert.NotEmpty(written);
+        Assert.Equal(0x16, written[0]);                              // TLS handshake record
+        Assert.Equal(0x03, written[1]);
+        Assert.DoesNotContain(UuidBigEndian, IndexesOf(written));    // and no cleartext credential
+
+        static IEnumerable<byte[]> IndexesOf(byte[] haystack) =>
+            Enumerable.Range(0, Math.Max(haystack.Length - UuidBigEndian.Length + 1, 0))
+                .Select(i => haystack.AsSpan(i, UuidBigEndian.Length).ToArray());
     }
 
     [Fact]

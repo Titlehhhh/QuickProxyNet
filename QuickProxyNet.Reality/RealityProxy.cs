@@ -11,17 +11,15 @@ namespace QuickProxyNet.Reality;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>What this is and is not.</b> REALITY authenticates by hiding a key exchange inside the TLS
-/// <c>session_id</c> of a ClientHello that must be byte-identical to a real browser's. .NET's
-/// <see cref="System.Net.Security.SslStream"/> delegates the handshake to Schannel or OpenSSL and
-/// exposes no way to author that ClientHello, so QuickProxyNet's in-process VLESS client cannot
-/// speak REALITY and says so rather than downgrading. This package closes that gap the honest
-/// way — by running the reference implementation — instead of by approximating a fingerprint,
-/// which would mark the user as "not the browser I claim to be" rather than merely failing.
+/// <b>What this is for, now that REALITY works in-process.</b> <see cref="VlessClient"/> speaks
+/// REALITY and <c>xtls-rprx-vision</c> by itself, with no binary, so this type is no longer the
+/// way to reach a REALITY node — it is the way to reach what the managed stack still does not
+/// implement: the <c>grpc</c> and <c>xhttp</c> transports, and Vision's TLS-in-TLS splice.
 /// </para>
 /// <para>
-/// The cost is a child process and a binary the caller has to supply. In exchange, everything
-/// Xray speaks comes with it: REALITY, <c>xtls-rprx-vision</c>, and the transports underneath.
+/// The other reason to reach for it is the ClientHello. The managed client's hello is not yet a
+/// browser fingerprint; Xray's uTLS one is. Where being indistinguishable matters more than
+/// avoiding a child process, this is still the honest choice.
 /// </para>
 /// <para>
 /// <b>Lifetime.</b> One instance owns exactly one Xray process and one loopback port.

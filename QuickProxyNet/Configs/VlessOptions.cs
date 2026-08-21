@@ -25,9 +25,10 @@ public enum VlessSecurity
 /// </summary>
 /// <remarks>
 /// Supported at connect time: the <c>tcp</c>/<c>raw</c>, <c>ws</c> and <c>httpupgrade</c>
-/// transports with <see cref="VlessSecurity.None"/> or <see cref="VlessSecurity.Tls"/>.
-/// Other fields (REALITY keys, non-empty <see cref="Flow"/>, the <c>grpc</c>/<c>xhttp</c>
-/// transports) are parsed so callers can inspect them, but connecting with them throws
+/// transports with any of <see cref="VlessSecurity.None"/>, <see cref="VlessSecurity.Tls"/> or
+/// <see cref="VlessSecurity.Reality"/>, with or without <c>xtls-rprx-vision</c> in
+/// <see cref="Flow"/>. The rest (any other flow, the <c>grpc</c>/<c>xhttp</c> transports) is
+/// parsed so callers can inspect it, but connecting throws
 /// <see cref="System.NotSupportedException"/>.
 /// </remarks>
 public sealed class VlessOptions

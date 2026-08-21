@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Text;
 
 namespace QuickProxyNet;
 
@@ -25,8 +26,15 @@ internal static class VlessHelper
     private const byte AtypDomain = 0x02;
     private const byte AtypIPv6 = 0x03;
 
-    // ver(1) + uuid(16) + addonsLen(1) + cmd(1) + port(2) + max address.
-    private const int MaxRequestSize = 1 + UuidCodec.Size + 1 + 1 + 2 + ProxyAddress.MaxLength;
+    /// <summary>Protobuf tag for <c>Addons.Flow</c>: field 1, length-delimited.</summary>
+    private const byte AddonsFlowTag = 0x0A;
+
+    /// <summary>The tag and length that precede the flow identifier inside the addons block.</summary>
+    private const int AddonsOverhead = 2;
+
+    // ver(1) + uuid(16) + addonsLen(1) + addons + cmd(1) + port(2) + max address.
+    private static readonly int MaxRequestSize =
+        1 + UuidCodec.Size + 1 + AddonsOverhead + VisionStream.FlowName.Length + 1 + 2 + ProxyAddress.MaxLength;
 
     /// <summary>
     /// Writes the VLESS request header over <paramref name="stream"/> and returns the stream
@@ -40,10 +48,11 @@ internal static class VlessHelper
     internal static async ValueTask<Stream> EstablishVlessTunnelAsync(
         Stream stream, VlessOptions options, string host, int port, CancellationToken cancellationToken)
     {
+        bool vision = IsVision(options.Flow);
         byte[] buffer = ArrayPool<byte>.Shared.Rent(MaxRequestSize);
         try
         {
-            int length = BuildRequest(buffer, options.Id, host, port);
+            int length = BuildRequest(buffer, options.Id, host, port, vision ? VisionStream.FlowName : default);
             await stream.WriteAsync(buffer.AsMemory(0, length), cancellationToken).ConfigureAwait(false);
             await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -54,18 +63,64 @@ internal static class VlessHelper
             ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
         }
 
-        return new VlessResponseStream(stream, host, port);
+        Stream session = new VlessResponseStream(stream, host, port);
+        if (!vision)
+            return session;
+
+        // Vision framing starts where the payload would otherwise start, so it wraps the
+        // response stream rather than the transport.
+        return CreateVisionStream(session, options.Id);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="flow"/> is the one XTLS flow this library speaks.
+    /// </summary>
+    /// <remarks>
+    /// The comparison is exact. A server configured with a flow we do not implement must fail
+    /// loudly rather than be handed a plain VLESS request that it will answer in a framing we
+    /// then misread — which looks like a working connection for about one packet.
+    /// </remarks>
+    internal static bool IsVision(string? flow) =>
+        string.Equals(flow, VisionStream.FlowName, StringComparison.Ordinal);
+
+    private static VisionStream CreateVisionStream(Stream session, string id)
+    {
+        Span<byte> uuid = stackalloc byte[UuidCodec.Size];
+        UuidCodec.WriteBigEndian(id, uuid);
+        return new VisionStream(session, uuid);
     }
 
     internal static int BuildRequest(Span<byte> buffer, ReadOnlySpan<char> id, string host, int port)
+        => BuildRequest(buffer, id, host, port, default);
+
+    /// <summary>
+    /// Writes the request header, carrying <paramref name="flow"/> in the addons block when it
+    /// is non-empty. The addons are a protobuf message with a single field, so the encoding is
+    /// written by hand rather than pulling in a protobuf runtime for five bytes.
+    /// </summary>
+    internal static int BuildRequest(
+        Span<byte> buffer, ReadOnlySpan<char> id, string host, int port, ReadOnlySpan<char> flow)
     {
         buffer[0] = Version;
         UuidCodec.WriteBigEndian(id, buffer.Slice(1, UuidCodec.Size));
-        buffer[17] = 0x00; // addons length
-        buffer[18] = CommandTcp;
-        BinaryPrimitives.WriteUInt16BigEndian(buffer.Slice(19), (ushort)port);
-        int addressLength =
-            ProxyAddress.WriteTypeAndAddress(host, buffer.Slice(21), AtypIPv4, AtypDomain, AtypIPv6);
-        return 21 + addressLength;
+
+        int offset = 1 + UuidCodec.Size;
+        if (flow.IsEmpty)
+        {
+            buffer[offset++] = 0x00; // addons length
+        }
+        else
+        {
+            buffer[offset++] = (byte)(AddonsOverhead + flow.Length);
+            buffer[offset++] = AddonsFlowTag;
+            buffer[offset++] = (byte)flow.Length;
+            offset += Encoding.ASCII.GetBytes(flow, buffer[offset..]);
+        }
+
+        buffer[offset++] = CommandTcp;
+        BinaryPrimitives.WriteUInt16BigEndian(buffer[offset..], (ushort)port);
+        offset += 2;
+        offset += ProxyAddress.WriteTypeAndAddress(host, buffer[offset..], AtypIPv4, AtypDomain, AtypIPv6);
+        return offset;
     }
 }

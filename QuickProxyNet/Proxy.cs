@@ -19,6 +19,49 @@ namespace QuickProxyNet;
 public static class Proxy
 {
     /// <summary>
+    /// Connects to a target host through a proxy described by a URL or share link of any
+    /// supported scheme, including <c>vless</c>, <c>trojan</c> and <c>vmess</c>.
+    /// </summary>
+    /// <param name="proxyLink">
+    /// The proxy URL or share link. See <see cref="ProxyClientFactory.Create(string)"/> for the
+    /// schemes this accepts.
+    /// </param>
+    /// <param name="host">The target host to connect to through the proxy.</param>
+    /// <param name="port">The target port.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <returns>A connected <see cref="Stream"/> tunneled through the proxy.</returns>
+    /// <remarks>
+    /// The <see cref="Uri"/> overloads below cover only the classic schemes, and deliberately so:
+    /// they skip the client object entirely, which is what makes them suitable for checking
+    /// proxies by the thousand. This one goes through <see cref="ProxyClientFactory"/> instead,
+    /// because VLESS, Trojan and VMess need the parsed configuration to negotiate at all. When
+    /// you have a link and no reason to care which family it belongs to, use this.
+    /// </remarks>
+    public static async ValueTask<Stream> ConnectAsync(string proxyLink, string host, int port,
+        CancellationToken cancellationToken = default)
+    {
+        IProxyClient client = ProxyClientFactory.Instance.Create(proxyLink);
+        return await client.ConnectAsync(host, port, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Connects to a target host through a proxy described by a URL or share link, giving up
+    /// after <paramref name="timeout"/>.
+    /// </summary>
+    /// <param name="proxyLink">The proxy URL or share link.</param>
+    /// <param name="host">The target host to connect to through the proxy.</param>
+    /// <param name="port">The target port.</param>
+    /// <param name="timeout">Maximum time to wait for the connection to complete.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <returns>A connected <see cref="Stream"/> tunneled through the proxy.</returns>
+    public static async ValueTask<Stream> ConnectAsync(string proxyLink, string host, int port,
+        TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        IProxyClient client = ProxyClientFactory.Instance.Create(proxyLink);
+        return await client.ConnectAsync(host, port, timeout, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Connects to a target host through the specified proxy.
     /// Opens a socket, negotiates the tunnel, and returns the connected stream.
     /// The caller owns the returned <see cref="Stream"/> and must dispose it.
