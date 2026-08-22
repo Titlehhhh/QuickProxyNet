@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using QuickProxyNet.Reality;
 
 namespace QuickProxyNet.Tests;
 
@@ -46,6 +45,33 @@ public class X25519Test
         X25519.Agree(result, Hex(scalar), Hex(u));
 
         Assert.Equal(expected, Convert.ToHexString(result).ToLowerInvariant());
+    }
+
+    /// <summary>
+    /// RFC 7748 §5.2, the iterated vector: k = u = 9, then k, u = X25519(k, u), k for each
+    /// round. One round and a thousand rounds have published results. A single-vector test
+    /// exercises one set of limb values; a thousand chained ones exercise a thousand, which is
+    /// what finds a carry that is wrong for a few inputs in 2^255.
+    /// </summary>
+    [Theory]
+    [InlineData(1, "422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079")]
+    [InlineData(1000, "684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51")]
+    public void Rfc7748_IteratedScalarMultiplication(int iterations, string expected)
+    {
+        byte[] k = new byte[32];
+        byte[] u = new byte[32];
+        k[0] = 9;
+        u[0] = 9;
+
+        byte[] result = new byte[32];
+        for (int i = 0; i < iterations; i++)
+        {
+            X25519.Agree(result, k, u);
+            Array.Copy(k, u, 32);
+            Array.Copy(result, k, 32);
+        }
+
+        Assert.Equal(expected, Convert.ToHexString(k).ToLowerInvariant());
     }
 
     // RFC 7748 §6.1.

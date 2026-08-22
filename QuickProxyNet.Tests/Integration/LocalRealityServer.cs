@@ -143,7 +143,10 @@ public sealed class LocalRealityServer : IAsyncDisposable
                 lock (log)
                 {
                     log.Add(e.Data);
-                    if (log.Count > 40)
+                    // Generous on purpose: with show=true the REALITY trace alone is ~40 lines
+                    // per handshake, and the one line that explains a failure is easily the
+                    // oldest one.
+                    if (log.Count > 200)
                         log.RemoveAt(0);
                 }
             }
@@ -249,6 +252,19 @@ public sealed class LocalRealityServer : IAsyncDisposable
             w.WriteStartArray("outbounds");
             w.WriteStartObject();
             w.WriteString("protocol", "freedom");
+            // Xray 26.x gave freedom a default "finalRules" policy: traffic that arrived through
+            // a vless/vmess/trojan inbound and targets a private or reserved address is not
+            // refused but blackholed — the connection is held open and silent for up to a
+            // minute ("proxy/freedom: blocked target ..., blackholing connection"). Every target
+            // in these tests is on loopback, so without an explicit allow the REALITY handshake
+            // and the VLESS request both succeed and then nothing ever comes back.
+            w.WriteStartObject("settings");
+            w.WriteStartArray("finalRules");
+            w.WriteStartObject();
+            w.WriteString("action", "allow");
+            w.WriteEndObject();
+            w.WriteEndArray();
+            w.WriteEndObject();
             w.WriteEndObject();
             w.WriteEndArray();
 

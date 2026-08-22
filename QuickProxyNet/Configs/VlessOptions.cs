@@ -12,9 +12,9 @@ public enum VlessSecurity
     Tls,
 
     /// <summary>
-    /// REALITY transport security (<c>security=reality</c>). Parsed for completeness but
-    /// not yet supported at connect time — it requires a browser-like uTLS ClientHello
-    /// fingerprint that <see cref="System.Net.Security.SslStream"/> cannot produce.
+    /// REALITY transport security (<c>security=reality</c>), spoken by this library's own
+    /// TLS 1.3 client with no external process. Requires <see cref="VlessOptions.RealityPublicKey"/>.
+    /// The ClientHello is not yet a browser fingerprint; see <c>docs/reality-fingerprint-plan.md</c>.
     /// </summary>
     Reality
 }

@@ -243,7 +243,10 @@ internal sealed class VmessStream : Stream
     {
         _receiveSealed ??= ArrayPool<byte>.Shared.Rent(InitialReceiveBufferSize);
 
-        // A short read of the prefix is truncation, never a clean end of stream.
+        // A short read of the prefix is truncation, never a clean end of stream: end of stream
+        // is in band (the authenticated empty chunk), and a FIN in its place is exactly what a
+        // truncation attack looks like. Xray's own reader is more lenient here; this one keeps
+        // the documented contract.
         await _inner.ReadExactlyAsync(_receiveSealed.AsMemory(0, LengthPrefixSize), cancellationToken);
         int sealedLength = BinaryPrimitives.ReadUInt16BigEndian(_receiveSealed.AsSpan(0, LengthPrefixSize));
 
@@ -383,18 +386,24 @@ internal sealed class VmessStream : Stream
                 {
                     await CompleteWriteAsync(CancellationToken.None);
                 }
-                catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException
+                                            or OperationCanceledException or ProxyProtocolException)
                 {
-                    // A broken transport must not turn disposal into a failure.
+                    // A broken transport must not turn disposal into a failure. The WebSocket
+                    // transport reports a dead socket as ProxyProtocolException, so that is
+                    // as much "broken transport" here as an IOException is.
                 }
             }
         }
         finally
         {
             _disposed = true;
-            ReleaseResources();
+            // Transport first: a read still in flight on another thread targets these buffers,
+            // and closing the transport is what faults it. Returning the arrays to the pool
+            // before that lets a late completion write into someone else's rental.
             if (!_leaveInnerOpen)
                 await _inner.DisposeAsync();
+            ReleaseResources();
         }
 
         GC.SuppressFinalize(this);
@@ -422,7 +431,7 @@ internal sealed class VmessStream : Stream
                         _inner.Write(_sendBuffer!.AsSpan(0, length));
                         _inner.Flush();
                     }
-                    catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+                    catch (Exception ex) when (ex is IOException or ObjectDisposedException or ProxyProtocolException)
                     {
                         // See DisposeAsync.
                     }
@@ -431,9 +440,9 @@ internal sealed class VmessStream : Stream
             finally
             {
                 _disposed = true;
-                ReleaseResources();
                 if (!_leaveInnerOpen)
                     _inner.Dispose();
+                ReleaseResources();
             }
         }
         else

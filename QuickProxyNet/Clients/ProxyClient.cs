@@ -67,8 +67,10 @@ public abstract class ProxyClient : IProxyClient
     // An IPv6 literal must be bracketed in a URI ("[2001:db8::1]"), otherwise the Uri
     // parser reads the address's colons as a port separator and throws. Host names and
     // IPv4 literals never contain ':', so this only affects IPv6 endpoints.
+    // An IPv6 literal needs brackets inside a URI; one that already has them (a hand-built
+    // options object may carry "[::1]") must not get a second pair.
     private static string FormatUriHost(string host) =>
-        host.Contains(':') ? $"[{host}]" : host;
+        host.Contains(':') && !host.StartsWith('[') ? $"[{host}]" : host;
 
     public Uri ProxyUri { get; private set; }
     public abstract ProxyType Type { get; }
@@ -126,6 +128,16 @@ public abstract class ProxyClient : IProxyClient
         {
             return await ConnectAsync(stream, host, port, cancellationToken);
         }
+        catch (Exception ex) when (ex is IOException or SocketException)
+        {
+            // The proxy closed or reset the connection while we were still negotiating. That is
+            // the same failure class as "could not connect" from the caller's point of view, and
+            // it must arrive as one: a raw IOException here is the one place the "all protocol
+            // errors are ProxyProtocolException" promise was not kept.
+            await stream.DisposeAsync();
+            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
+                $"Proxy {ProxyHost}:{ProxyPort} closed the connection during the handshake for target {host}:{port}.", ex);
+        }
         catch
         {
             await stream.DisposeAsync();
@@ -177,6 +189,9 @@ public abstract class ProxyClient : IProxyClient
             if (Volatile.Read(ref timedOut.Value))
                 throw new ProxyProtocolException(ProxyErrorCode.Timeout,
                     $"Connection to proxy {ProxyHost}:{ProxyPort} timed out after {timeout}.", ex);
+            if (ex is IOException or SocketException)
+                throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
+                    $"Proxy {ProxyHost}:{ProxyPort} closed the connection during the handshake for target {host}:{port}.", ex);
             throw;
         }
     }

@@ -1,21 +1,22 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
         <TargetFrameworks>net8.0;net9.0;net10.0;net11.0</TargetFrameworks>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <LangVersion>latest</LangVersion>
         <MinVerTagPrefix>v</MinVerTagPrefix>
-        <MinVerMinimumMajorMinor>3.0</MinVerMinimumMajorMinor>
+        <MinVerMinimumMajorMinor>4.0</MinVerMinimumMajorMinor>
     </PropertyGroup>
     <PropertyGroup>
         <PackageId>QuickProxyNet</PackageId>
         <Authors>Titlehhhh</Authors>
         <Company>Titlehhhh</Company>
         <Description>QuickProxyNet is a high-performance, zero-dependency .NET library for connecting to servers via HTTP, HTTPS, SOCKS4, SOCKS4a and SOCKS5 proxies, and via the VPN-style protocols VLESS, VMess and Trojan over tcp, ws or httpupgrade. Provides direct Stream access for low-level network operations. VLESS REALITY and the xtls-rprx-vision flow are implemented in managed code, with no external binary.</Description>
-        <PackageTags>proxy;networking;http;socks;vless;vmess;trojan;high-performance</PackageTags>
-        <Copyright>Copyright © Titlehhhh 2024</Copyright>
+        <PackageTags>proxy;networking;http;socks;socks5;vless;vmess;trojan;reality;xtls;vision;xray;v2ray;vpn;high-performance</PackageTags>
+        <Copyright>Copyright © Titlehhhh 2024-2026</Copyright>
         <RepositoryUrl>https://github.com/Titlehhhh/QuickProxyNet</RepositoryUrl>
         <PackageProjectUrl>https://github.com/Titlehhhh/QuickProxyNet</PackageProjectUrl>
+        <PackageReleaseNotes>4.0.0 adds VLESS, VMess and Trojan outbounds next to the HTTP/SOCKS clients. VLESS REALITY and the xtls-rprx-vision flow are implemented in managed code — no Xray or other external binary. ProxyClientFactory.Create(string) and Proxy.ConnectAsync(string, host, port) take a link of any supported scheme, including vmess:// links that System.Uri cannot represent. No public type or member from 3.0.0 was removed or changed; the major bump covers new ProxyType/ProxyErrorCode members and Create(Uri) now returning a client for vless/trojan/vmess instead of throwing. Not included: grpc and xhttp transports, Hysteria2, and a browser-grade ClientHello fingerprint for REALITY. Full notes: https://github.com/Titlehhhh/QuickProxyNet/releases/tag/v4.0.0</PackageReleaseNotes>
     </PropertyGroup>
     
     <PropertyGroup>
@@ -26,12 +27,12 @@
     <PropertyGroup>        
         <PackageIcon>icon.png</PackageIcon>
         <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
-        <PackageReadmeFile>readme.md</PackageReadmeFile>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
     </PropertyGroup>
     <ItemGroup>
         <None Include="$(MSBuildThisFileDirectory)\icon.png" Pack="true" PackagePath="" Visible="false"/>
         <None Include="$(MSBuildThisFileDirectory)\LICENSE.txt" Pack="true" PackagePath="" Visible="false"/>
-        <None Include="$(MSBuildThisFileDirectory)\readme.md" Pack="true" PackagePath=""/>
+        <None Include="$(MSBuildThisFileDirectory)\README.md" Pack="true" PackagePath=""/>
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="MinVer" Version="6.0.0" PrivateAssets="All"/>

@@ -2,7 +2,7 @@ using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 
-namespace QuickProxyNet.Reality;
+namespace QuickProxyNet;
 
 /// <summary>TLS record content types (RFC 8446 §5.1).</summary>
 internal enum TlsContentType : byte

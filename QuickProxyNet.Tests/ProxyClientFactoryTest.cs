@@ -160,6 +160,57 @@ public class ProxyClientFactoryTest
         Assert.Equal(ProxyErrorCode.ConnectionFailed, ex.ErrorCode);
     }
 
+    /// <summary>
+    /// A proxy that accepts and then says nothing must end in <see cref="ProxyErrorCode.Timeout"/>
+    /// through the string entry point — distinguishable from "could not connect", because the
+    /// caller's remedy differs (wait longer vs. give up on the node).
+    /// </summary>
+    [Fact]
+    public async Task ProxyConnect_WithASilentProxy_TimesOutWithTheTimeoutCode()
+    {
+        // SOCKS5 is the right protocol for this: the client must read the server's method
+        // selection before it can do anything, so a silent server hangs the handshake. (VLESS
+        // would not — it writes its header and reads nothing until the first payload read.)
+        var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        try
+        {
+            // Accept and then hold the socket open and silent. The accepted client is kept
+            // referenced until the end: discarded, it would be finalized under GC pressure and
+            // the close would reach our side as a reset — a different failure than the one
+            // this test is about.
+            Task<System.Net.Sockets.TcpClient> accepted = listener.AcceptTcpClientAsync();
+
+            var ex = await Assert.ThrowsAsync<ProxyProtocolException>(async () =>
+                await Proxy.ConnectAsync($"socks5://127.0.0.1:{port}", "example.com", 80, TimeSpan.FromMilliseconds(500)));
+
+            Assert.Equal(ProxyErrorCode.Timeout, ex.ErrorCode);
+            (await accepted).Dispose();
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    /// <summary>
+    /// Whatever a malformed link throws — from the factory, from a parser, from the client
+    /// constructor — the credential in it must not be in the message or any inner message.
+    /// </summary>
+    [Theory]
+    [InlineData("vless://SECRETSECRETSECRETSECRETSECRETSECRETSECRET1@example.com:443?security=none")] // 44-char id: rejected
+    [InlineData("trojan://SECRETPASSWORD@:443")]                                                  // no host
+    [InlineData("socks5://user:SECRETPASSWORD@[not an address")]                                 // not a URI
+    [InlineData("vmess://SECRETPASSWORD-this-is-not-base64-json")]                               // not base64 JSON
+    public void Create_MalformedLink_NeverEchoesTheCredential(string link)
+    {
+        Exception ex = Assert.ThrowsAny<Exception>(() => Create(link));
+
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+            Assert.DoesNotContain("SECRET", e.Message);
+    }
+
     /// <summary>A port that was bound and immediately released — nothing is listening on it.</summary>
     private static int UnusedPort()
     {

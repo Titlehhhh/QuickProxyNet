@@ -160,16 +160,19 @@ TCP connect -> SslStream.AuthenticateAsClientAsync -> VLESS -> Stream
 
 ### `security=reality`
 
-REALITY занимает место TLS, но не является обычным `SslStream`:
+Реализовано, в ядре. REALITY занимает место TLS, но не является `SslStream` —
+рукопожатие написано своё (`Internal/Reality/`: X25519, HKDF key schedule, record
+layer, ClientHello с запечатанным в `session_id` ключом):
 
 ```text
-TCP connect -> REALITY/uTLS handshake -> VLESS -> Stream
+TCP connect -> RealityTlsClient.HandshakeAsync -> VLESS -> Stream
 ```
 
-Нужны public key, short id, SNI/serverName, uTLS fingerprint и проверка
-REALITY-specific certificate behavior. Это отдельный transport security слой.
-Его нельзя полноценно сделать через стандартный .NET `SslStream`, потому что
-`SslStream` не дает точный browser-like ClientHello fingerprint.
+Из ссылки берутся `pbk` (X25519 public key, base64url), `sid`, `sni`; ALPN по
+умолчанию `h2, http/1.1`, как у Xray. Сервер, не узнавший нас, отдаёт настоящий
+сертификат decoy-сайта — это приходит как `RealityHandshakeException` с кодом
+`AuthFailed`. Чего нет: браузерного отпечатка ClientHello (`fp=chrome` сегодня
+декоративен) — см. `reality-fingerprint-plan.md`.
 
 ### `flow=xtls-rprx-vision`
 
@@ -212,8 +215,9 @@ TLS. Клиент, который её игнорирует, зависает н
 - Для `security=tls` сначала завернуть socket в `SslStream`.
 - UUID byte order покрыть unit-тестом.
 - Domain length ограничен одним байтом.
-- Response header надо прочитать до возврата stream, иначе пользователь увидит
-  `00 00` перед байтами target-а.
+- Response header читается лениво, на первом `Read` (`VlessResponseStream`): ни
+  Xray, ни sing-box не шлют его, пока target не ответил, и чтение до возврата
+  stream дедлочит любой client-speaks-first протокол. См. AGENTS.md, правило 2.
 
 ## Источники
 

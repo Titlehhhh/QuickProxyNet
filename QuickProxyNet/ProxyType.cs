@@ -9,7 +9,5 @@ public enum ProxyType
     Socks5,
     Vless,
     Vmess,
-    Trojan,
-    Hysteria2,
-    Tuic
+    Trojan
 }

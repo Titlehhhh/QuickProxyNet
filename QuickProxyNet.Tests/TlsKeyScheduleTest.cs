@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using QuickProxyNet.Reality;
 
 namespace QuickProxyNet.Tests;
 

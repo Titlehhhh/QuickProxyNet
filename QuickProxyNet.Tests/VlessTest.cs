@@ -1,4 +1,3 @@
-using QuickProxyNet.Reality;
 using QuickProxyNet.Tests.Helpers;
 
 namespace QuickProxyNet.Tests;

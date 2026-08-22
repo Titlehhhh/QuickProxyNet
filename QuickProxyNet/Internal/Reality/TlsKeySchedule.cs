@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace QuickProxyNet.Reality;
+namespace QuickProxyNet;
 
 /// <summary>
 /// The TLS 1.3 key schedule (RFC 8446 §7.1) and its traffic-key derivation (§7.3).

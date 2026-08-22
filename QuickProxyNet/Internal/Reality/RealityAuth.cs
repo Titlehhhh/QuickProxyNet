@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 
-namespace QuickProxyNet.Reality;
+namespace QuickProxyNet;
 
 /// <summary>
 /// The REALITY authentication primitives: deriving the auth key, sealing it into the TLS

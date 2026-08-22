@@ -1,5 +1,4 @@
 using System.Net.Sockets;
-using QuickProxyNet.Reality;
 
 namespace QuickProxyNet.Tests.Integration;
 
@@ -82,6 +81,7 @@ public class ManagedTlsHandshakeTests
             async () => await RealityTlsClient.HandshakeAsync(tcp.GetStream(), Options(wrongKey), timeout.Token));
 
         Assert.Contains("REALITY", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(ProxyErrorCode.AuthFailed, ex.ErrorCode);
     }
 
     /// <summary>
@@ -94,9 +94,11 @@ public class ManagedTlsHandshakeTests
         using TcpClient tcp = await ConnectAsync(server);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
 
-        await Assert.ThrowsAsync<RealityHandshakeException>(
+        var ex = await Assert.ThrowsAsync<RealityHandshakeException>(
             async () => await RealityTlsClient.HandshakeAsync(
                 tcp.GetStream(), Options(shortId: "cdef"), timeout.Token));
+
+        Assert.Equal(ProxyErrorCode.AuthFailed, ex.ErrorCode);
     }
 
     /// <summary>

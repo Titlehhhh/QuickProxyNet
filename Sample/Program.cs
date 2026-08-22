@@ -1,81 +1,37 @@
-﻿using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using QuickProxyNet;
 
-namespace Sample;
+// Paste any supported link — the library reads the scheme itself:
+//   socks5://user:pass@host:1080
+//   http://host:8080
+//   vless://uuid@host:443?security=reality&pbk=...&sid=...&sni=...&flow=xtls-rprx-vision
+//   trojan://password@host:443?sni=...
+//   vmess://<base64 json>
+Console.Write("Proxy link: ");
+string? link = Console.ReadLine();
+if (string.IsNullOrWhiteSpace(link))
+    return;
 
-class Program
+const string Host = "example.com";
+
+try
 {
-    static async Task Main(string[] args)
-    {
-        Console.WriteLine("Enter proxy uri (protocol://<login?>:<pass?>@host:port");
-        string? proxyUri = Console.ReadLine();
+    await using Stream stream = await Proxy.ConnectAsync(link, Host, 80, TimeSpan.FromSeconds(10));
 
-        if (string.IsNullOrEmpty(proxyUri))
-            return;
+    await stream.WriteAsync(Encoding.ASCII.GetBytes(
+        $"GET / HTTP/1.1\r\nHost: {Host}\r\nConnection: close\r\n\r\n"));
+    await stream.FlushAsync();
 
-        Uri uri = new Uri(proxyUri);
-
-        ProxyClientFactory factory = new ProxyClientFactory();
-
-        IProxyClient proxyClient = factory.Create(uri);
-
-        Stream stream = await proxyClient.ConnectAsync("example.com", 80); // 80 for HTTP
-
-
-        HttpRequestMessage requestMessage = new HttpRequestMessage();
-
-        requestMessage.Method = HttpMethod.Get;
-        requestMessage.RequestUri = new Uri("https://www.example.com/");
-
-        string rawString = await ToRawString(requestMessage);
-
-        byte[] bytes = Encoding.UTF8.GetBytes(rawString);
-
-        await stream.WriteAsync(bytes);
-
-        using StreamReader sr = new StreamReader(stream);
-        while (!sr.EndOfStream)
-        {
-            var line = await sr.ReadLineAsync();
-            if (!string.IsNullOrEmpty(line))
-            {
-                Console.WriteLine(line);
-            }
-        }
-    }
-
-    public static async Task<string> ToRawString(HttpRequestMessage request)
-    {
-        var sb = new StringBuilder();
-
-        var line1 = $"{request.Method} {request.RequestUri} HTTP/{request.Version}";
-        sb.AppendLine(line1);
-
-        foreach (var (key, value) in request.Headers)
-        foreach (var val in value)
-        {
-            var header = $"{key}: {val}";
-            sb.AppendLine(header);
-        }
-
-        if (request.Content?.Headers != null)
-        {
-            foreach (var (key, value) in request.Content.Headers)
-            foreach (var val in value)
-            {
-                var header = $"{key}: {val}";
-                sb.AppendLine(header);
-            }
-        }
-
-        sb.AppendLine();
-
-        var body = await (request.Content?.ReadAsStringAsync() ?? Task.FromResult<string>(null));
-        if (!string.IsNullOrWhiteSpace(body))
-            sb.AppendLine(body);
-
-        return sb.ToString();
-    }
+    using var reader = new StreamReader(stream, Encoding.ASCII);
+    Console.WriteLine(await reader.ReadToEndAsync());
+}
+catch (ProxyProtocolException ex)
+{
+    // Every protocol failure — classic or VPN-style, REALITY included — arrives here with a code.
+    Console.Error.WriteLine($"{ex.ErrorCode}: {ex.Message}");
+}
+catch (NotSupportedException ex)
+{
+    // The link parsed, but names a transport or flow this library does not implement.
+    Console.Error.WriteLine(ex.Message);
 }

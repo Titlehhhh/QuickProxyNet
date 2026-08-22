@@ -145,11 +145,15 @@ independent:
   a REALITY server whose `dest` points at a decoy TLS inbound in the same process, so
   nothing leaves the machine.
 
-**Open question, deliberately left open:** everything under `Managed/` is `internal`.
-The headline capability — REALITY with no external binary — is therefore unreachable
-by anyone consuming the package. Deciding its public shape (a `RealityClient :
-IProxyClient`? folded into `VlessClient`? a third package?) is unfinished work, not an
-oversight.
+**Public shape, decided:** REALITY is reached through `VlessClient` — `security=reality`
+in `VlessOptions`, or simply the share link via `ProxyClientFactory.Create(string)`.
+Nothing under `Internal/Reality/` is public except `RealityHandshakeException`, which is a
+`ProxyProtocolException` so existing `catch` blocks see it. A separate `RealityClient` or a
+third package were considered and rejected: a user holds a `vless://` link, and the link
+already says which security mode it wants.
+
+`Integration/ManagedRealityTunnelTests.PublicApi_*` are the tests that go through that
+public path end to end; the other `Managed*` tests call the handshake directly.
 
 ## Hard-Won Protocol Knowledge
 
@@ -370,7 +374,7 @@ docker compose -p quickproxynet-test -f tests/docker/docker-compose.yml down -v
 
 ## Diagnostics
 
-`tools/CorpusCheck` runs the share-link parsers over ~17k real-world links
+`tools/CorpusCheck` runs the share-link parsers over ~20k real-world links
 (PypsCFG `merged_all.txt`) and groups failures by reason:
 
 ```bash
@@ -400,7 +404,7 @@ derived from git tags through MinVer.
 - Do protocol work in **sequential** sub-agents. Parallel agents share the test
   project and break each other's build.
 - Verify every agent's claims yourself: `dotnet build -c Release` (0 warnings on
-  all three TFMs) and `dotnet test`. Do not trust a report.
+  all four TFMs) and `dotnet test`. Do not trust a report.
 - Ground truth for crypto is an **independent implementation** (a throwaway
   Python one worked well) that first reproduces the already-committed vectors,
   and only then is used to generate new ones.
@@ -420,20 +424,22 @@ socket") that has to be solved before they can be.
 
 ## What Is Worth Implementing Next
 
-Measured with `tools/CorpusCheck` over 21 403 real links (2026-08-14), counting what
-can actually **connect**, not what parses. See `docs/implementation-plan.md` §7 for
-the full table.
+Measured by this library's own parsers over 20 228 real links (2026-08-21), counting
+what can actually **connect**, not what parses. REALITY — 46% of the corpus — is done
+and in-process as of 4.0.0; what remains:
 
-| Blocker | Links | % of corpus |
-| --- | ---: | ---: |
-| REALITY (needs uTLS — `SslStream` cannot do it) | 10 653 | 49.8% |
-| gRPC | 991 | 4.6% |
-| xhttp (Xray-only) | 789 | 3.7% |
-| Hysteria2 / TUIC (QUIC) | 472 | 2.2% |
+| Blocker | % of corpus |
+| --- | ---: |
+| gRPC transport (needs an HTTP/2 layer) | 6.0% |
+| xhttp transport (HTTP/2/3, Xray-only) | 2.9% |
+| Hysteria2 / TUIC (QUIC) | 2.9% |
 
-The point of that table: **QUIC is the worst remaining investment**, not the next
-phase. It is the heaviest architectural work in the roadmap — it breaks the "one
-`ConnectAsync`, one socket" model — and buys 2.2%. The old roadmap listed it as
-phase 4 purely because it was next in the document, which is not a reason. REALITY
-is half the corpus and is gated on a uTLS ClientHello, so it is a separate project
-rather than a feature.
+And one thing that is not a blocker but matters more than any of those: the REALITY
+ClientHello is still not a browser fingerprint. It connects — verified against live
+nodes — but a DPI that fingerprints hellos can tell it from Chrome. The staged plan is
+in `docs/reality-fingerprint-plan.md`; it is the next REALITY work, ahead of any new
+transport.
+
+The point of the table: **QUIC is the worst remaining investment**. It is the heaviest
+architectural work — it breaks the "one `ConnectAsync`, one socket" model — and buys
+under 3%. gRPC is the cheapest of the three and unlocks the most.

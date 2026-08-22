@@ -60,14 +60,12 @@ public class LargeRequestDiagnosticTests
     /// ceiling so the test measures the proxy working rather than the ceiling.
     /// </para>
     /// </remarks>
-    [Theory]
+    [EnvTheory(LocalRealityServer.ExecutablePathVariable)]
     [InlineData(1_000)]
     [InlineData(16_000)]
     public async Task Socks5_HandlesLargeRequests(int padding)
     {
         string executable = Environment.GetEnvironmentVariable(LocalRealityServer.ExecutablePathVariable)!;
-        if (string.IsNullOrEmpty(executable))
-            return;
 
         using LoopbackEchoServer echo = LoopbackEchoServer.Start();
 

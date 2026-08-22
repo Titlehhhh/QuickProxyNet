@@ -1,6 +1,5 @@
 using System.Net.Sockets;
 using System.Text;
-using QuickProxyNet.Reality;
 
 namespace QuickProxyNet.Tests.Integration;
 
@@ -58,15 +57,84 @@ public class ManagedRealityTunnelTests
         return await VlessHelper.EstablishVlessTunnelAsync(tls, vless, "127.0.0.1", targetPort, cancellationToken);
     }
 
-    private static async Task<string> GetAsync(Stream tunnel, string path, CancellationToken cancellationToken)
+    /// <summary>
+    /// One request, whole response. On a timeout the failure carries Xray's own log, because
+    /// "the operation was canceled" after 30 seconds says nothing — the server's last lines
+    /// usually say everything (the 2026 finalRules blackhole took hours to find without them).
+    /// </summary>
+    private static async Task<string> GetAsync(
+        LocalRealityServer server, Stream tunnel, string path, CancellationToken cancellationToken)
     {
         byte[] request = Encoding.ASCII.GetBytes(
             $"GET {path} HTTP/1.1\r\nHost: qpn.test\r\nConnection: close\r\n\r\n");
         await tunnel.WriteAsync(request, cancellationToken);
         await tunnel.FlushAsync(cancellationToken);
 
-        using var reader = new StreamReader(tunnel, Encoding.ASCII);
-        return await reader.ReadToEndAsync(cancellationToken);
+        try
+        {
+            using var reader = new StreamReader(tunnel, Encoding.ASCII);
+            return await reader.ReadToEndAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            Assert.Fail($"No response through the tunnel before the timeout. Xray said:\n{server.Log()}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The same tunnel, but opened the way a user opens it: a share link into
+    /// <see cref="ProxyClientFactory"/>, <c>ConnectAsync</c>, a stream back. Everything the
+    /// direct tests above bypass — <c>VlessClient.ConnectAsync</c>, its REALITY branch, the
+    /// option mapping from the link, the flow wrapping — is on this path and nowhere else.
+    /// </summary>
+    [EnvFact(LocalRealityServer.ExecutablePathVariable)]
+    public async Task PublicApi_ShareLinkThroughFactory_CarriesVlessOverReality()
+    {
+        using LoopbackEchoServer echo = LoopbackEchoServer.Start();
+        await using LocalRealityServer server = await LocalRealityServer.StartAsync(Executable);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        IProxyClient client = ProxyClientFactory.Instance.Create(server.ShareLink());
+        await using Stream tunnel = await client.ConnectAsync("127.0.0.1", echo.Port, timeout.Token);
+
+        Assert.Contains(LoopbackEchoServer.Body, await GetAsync(server, tunnel, "/", timeout.Token));
+    }
+
+    /// <summary>The one-liner, with Vision on — the configuration real nodes almost always have.</summary>
+    [EnvFact(LocalRealityServer.ExecutablePathVariable)]
+    public async Task PublicApi_ProxyConnectAsyncString_CarriesVlessOverRealityWithVision()
+    {
+        using LoopbackEchoServer echo = LoopbackEchoServer.Start();
+        await using LocalRealityServer server = await LocalRealityServer.StartAsync(Executable, VisionStream.FlowName);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        await using Stream tunnel = await Proxy.ConnectAsync(
+            server.ShareLink(), "127.0.0.1", echo.Port, TimeSpan.FromSeconds(30), timeout.Token);
+
+        string response = await GetAsync(server, tunnel, "/" + new string('a', 40_000), timeout.Token);
+
+        Assert.Contains(LoopbackEchoServer.Body, response);
+    }
+
+    /// <summary>
+    /// A wrong public key through the public path must surface as the proxy error it is —
+    /// <see cref="ProxyErrorCode.AuthFailed"/>, the "check pbk/sid/sni" signal — not as some
+    /// other type the client's unwinding happened to wrap it in.
+    /// </summary>
+    [EnvFact(LocalRealityServer.ExecutablePathVariable)]
+    public async Task PublicApi_WrongPublicKey_IsAuthFailed()
+    {
+        await using LocalRealityServer server = await LocalRealityServer.StartAsync(Executable);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        // Valid base64url for 32 bytes, and not the server's key.
+        string link = server.ShareLink().Replace($"pbk={LocalRealityServer.PublicKey}", "pbk=LmsbBDEPXyy3PS0kYTdC55wlSCqteIEaw6trnKcMUeE");
+
+        var ex = await Assert.ThrowsAsync<RealityHandshakeException>(async () =>
+            await Proxy.ConnectAsync(link, "127.0.0.1", 80, timeout.Token));
+
+        Assert.Equal(ProxyErrorCode.AuthFailed, ex.ErrorCode);
     }
 
     /// <summary>
@@ -81,7 +149,7 @@ public class ManagedRealityTunnelTests
 
         await using Stream tunnel = await OpenTunnelAsync(server, echo.Port, timeout.Token);
 
-        Assert.Contains(LoopbackEchoServer.Body, await GetAsync(tunnel, "/", timeout.Token));
+        Assert.Contains(LoopbackEchoServer.Body, await GetAsync(server, tunnel, "/", timeout.Token));
     }
 
     /// <summary>
@@ -99,7 +167,7 @@ public class ManagedRealityTunnelTests
 
         // Comfortably past TlsRecordStream.MaxPlaintext, so the write path has to emit several
         // records and the server has to reassemble them.
-        string response = await GetAsync(tunnel, "/" + new string('a', 40_000), timeout.Token);
+        string response = await GetAsync(server, tunnel, "/" + new string('a', 40_000), timeout.Token);
 
         Assert.Contains(LoopbackEchoServer.Body, response);
     }
@@ -118,7 +186,7 @@ public class ManagedRealityTunnelTests
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             await using Stream tunnel = await OpenTunnelAsync(server, echo.Port, timeout.Token);
 
-            Assert.Contains(LoopbackEchoServer.Body, await GetAsync(tunnel, "/", timeout.Token));
+            Assert.Contains(LoopbackEchoServer.Body, await GetAsync(server, tunnel, "/", timeout.Token));
         }
     }
 
@@ -142,7 +210,7 @@ public class ManagedRealityTunnelTests
         await using Stream tunnel =
             await OpenTunnelAsync(server, echo.Port, timeout.Token, VisionStream.FlowName);
 
-        Assert.Contains(LoopbackEchoServer.Body, await GetAsync(tunnel, "/", timeout.Token));
+        Assert.Contains(LoopbackEchoServer.Body, await GetAsync(server, tunnel, "/", timeout.Token));
     }
 
     /// <summary>
@@ -159,7 +227,7 @@ public class ManagedRealityTunnelTests
         await using Stream tunnel =
             await OpenTunnelAsync(server, echo.Port, timeout.Token, VisionStream.FlowName);
 
-        string response = await GetAsync(tunnel, "/" + new string('a', 40_000), timeout.Token);
+        string response = await GetAsync(server, tunnel, "/" + new string('a', 40_000), timeout.Token);
 
         Assert.Contains(LoopbackEchoServer.Body, response);
     }

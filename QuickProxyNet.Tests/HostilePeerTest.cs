@@ -1,4 +1,3 @@
-using QuickProxyNet.Reality;
 
 namespace QuickProxyNet.Tests;
 
@@ -108,8 +107,13 @@ public class HostilePeerTest
         await using var peer = new ScriptedPeer(respond);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
-        return await Assert.ThrowsAsync<RealityHandshakeException>(
+        var ex = await Assert.ThrowsAsync<RealityHandshakeException>(
             async () => await RealityTlsClient.HandshakeAsync(peer, Options(), timeout.Token));
+
+        // Nothing a hostile peer does here is "we were not recognised": it is the peer breaking
+        // the protocol, and the code must say so — AuthFailed is reserved for the decoy relay.
+        Assert.Equal(ProxyErrorCode.InvalidResponse, ex.ErrorCode);
+        return ex;
     }
 
     /// <summary>

@@ -3,7 +3,7 @@ using System.Buffers.Binary;
 using System.Formats.Asn1;
 using System.Security.Cryptography;
 
-namespace QuickProxyNet.Reality;
+namespace QuickProxyNet;
 
 /// <summary>Settings for a managed REALITY handshake.</summary>
 internal sealed class RealityTlsOptions
@@ -168,7 +168,17 @@ internal sealed class RealityTlsClient
 
             try
             {
-                X25519.Agree(secrets.Shared, hello.PrivateKey, parsed.KeyShare);
+                try
+                {
+                    X25519.Agree(secrets.Shared, hello.PrivateKey, parsed.KeyShare);
+                }
+                catch (CryptographicException ex)
+                {
+                    // A key_share that lands on a low-order point yields an all-zero shared
+                    // secret; RFC 7748 §6.1 says abort. It is the peer's choice of key, not ours.
+                    throw new RealityHandshakeException(
+                        "The server's key_share is a low-order X25519 point; the handshake is refused.", ex);
+                }
 
                 DeriveHandshakeSecrets(
                     parsed.Suite, secrets.Shared, transcript.GetCurrentHash(),

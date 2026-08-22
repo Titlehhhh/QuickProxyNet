@@ -378,7 +378,7 @@ internal sealed class VisionStream : Stream
                 }
                 finally
                 {
-                    ArrayPool<byte>.Shared.Return(frame);
+                    ArrayPool<byte>.Shared.Return(frame, clearArray: true); // the caller's first packet
                 }
 
                 return;
@@ -408,7 +408,7 @@ internal sealed class VisionStream : Stream
                 }
                 finally
                 {
-                    ArrayPool<byte>.Shared.Return(frame);
+                    ArrayPool<byte>.Shared.Return(frame, clearArray: true); // the caller's first packet
                 }
 
                 return;
@@ -474,10 +474,13 @@ internal sealed class VisionStream : Stream
             return;
 
         _disposed = true;
-        ReturnBuffer();
 
+        // Transport first, buffer second: a ReadAsync still in flight on another thread is
+        // reading into _buffer, and closing the transport is what ends it. Returned first, the
+        // array could be re-rented and written into by that late completion.
         if (!_leaveInnerOpen)
             await _inner.DisposeAsync().ConfigureAwait(false);
+        ReturnBuffer();
 
         GC.SuppressFinalize(this);
     }
@@ -487,10 +490,9 @@ internal sealed class VisionStream : Stream
     {
         if (!_disposed && disposing)
         {
-            ReturnBuffer();
-
             if (!_leaveInnerOpen)
                 _inner.Dispose();
+            ReturnBuffer();
         }
 
         _disposed = true;
@@ -502,7 +504,9 @@ internal sealed class VisionStream : Stream
         byte[] buffer = _buffer;
         _buffer = [];
 
+        // Cleared: this held decrypted tunnel payload, and the pool hands the array to whoever
+        // rents next.
         if (buffer.Length > 0)
-            ArrayPool<byte>.Shared.Return(buffer);
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
     }
 }

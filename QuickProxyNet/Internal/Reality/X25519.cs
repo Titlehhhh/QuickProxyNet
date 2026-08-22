@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 
-namespace QuickProxyNet.Reality;
+namespace QuickProxyNet;
 
 /// <summary>
 /// X25519 scalar multiplication (RFC 7748), for the key exchange REALITY hides inside the TLS

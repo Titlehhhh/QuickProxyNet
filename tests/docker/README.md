@@ -43,7 +43,7 @@ All three are expected to be present locally; nothing here builds an image.
 
 | Image | Role |
 | --- | --- |
-| `ghcr.io/xtls/xray-core:latest` | Xray inbounds (verified against 26.3.27) |
+| `ghcr.io/xtls/xray-core:latest` | Xray inbounds (verified against 26.3.27; `freedom.finalRules: allow` is required from 26.x, which otherwise blackholes the private `echo` target) |
 | `ghcr.io/sagernet/sing-box:latest` | sing-box inbounds (verified against 1.13.14) |
 | `alpine:3.20` | HTTP echo target |
 

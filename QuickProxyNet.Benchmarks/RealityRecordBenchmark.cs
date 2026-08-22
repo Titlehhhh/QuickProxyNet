@@ -9,7 +9,6 @@ using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Reports;
 using BenchmarkDotNet.Running;
 using BenchmarkDotNet.Toolchains.InProcess.NoEmit;
-using QuickProxyNet.Reality;
 
 namespace QuickProxyNet.Benchmarks;
 

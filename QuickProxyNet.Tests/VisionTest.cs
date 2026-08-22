@@ -48,13 +48,18 @@ public class VisionTest
         return new VisionStream(duplex, UuidBigEndian);
     }
 
-    private static async Task<byte[]> ReadAllAsync(Stream stream, int chunk = 4096)
+    /// <summary>
+    /// Drains the stream through either <c>ReadAsync</c> or the synchronous <c>Read(Span)</c>.
+    /// The two paths are separate implementations inside <see cref="VisionStream"/>, so a
+    /// divergence between them is caught only by running the same scenario through both.
+    /// </summary>
+    private static async Task<byte[]> ReadAllAsync(Stream stream, int chunk = 4096, bool sync = false)
     {
         var all = new MemoryStream();
         byte[] buffer = new byte[chunk];
         while (true)
         {
-            int n = await stream.ReadAsync(buffer);
+            int n = sync ? stream.Read(buffer.AsSpan()) : await stream.ReadAsync(buffer);
             if (n == 0)
                 break;
 
@@ -78,8 +83,10 @@ public class VisionTest
         Assert.Equal(expected, await ReadAllAsync(stream));
     }
 
-    [Fact]
-    public async Task Read_StripsSeveralFrames_AndOnlyTheFirstCarriesTheUuid()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Read_StripsSeveralFrames_AndOnlyTheFirstCarriesTheUuid(bool sync)
     {
         byte[] wire =
         [
@@ -91,7 +98,7 @@ public class VisionTest
 
         await using VisionStream stream = Wrap(wire, out _);
 
-        Assert.Equal("onetwothreeraw", Encoding.ASCII.GetString(await ReadAllAsync(stream)));
+        Assert.Equal("onetwothreeraw", Encoding.ASCII.GetString(await ReadAllAsync(stream, sync: sync)));
     }
 
     /// <summary>
@@ -99,8 +106,10 @@ public class VisionTest
     /// can arrive one byte at a time. This is the case that a naive implementation passes in
     /// testing and fails against a real server.
     /// </summary>
-    [Fact]
-    public async Task Read_SurvivesFramesSplitAcrossEveryByteBoundary()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Read_SurvivesFramesSplitAcrossEveryByteBoundary(bool sync)
     {
         byte[] wire =
         [
@@ -112,7 +121,7 @@ public class VisionTest
         var duplex = new DuplexStream(wire) { MaxRead = 1 };
         await using var stream = new VisionStream(duplex, UuidBigEndian);
 
-        Assert.Equal("hello world!", Encoding.ASCII.GetString(await ReadAllAsync(stream, chunk: 3)));
+        Assert.Equal("hello world!", Encoding.ASCII.GetString(await ReadAllAsync(stream, chunk: 3, sync: sync)));
     }
 
     [Fact]
@@ -139,8 +148,10 @@ public class VisionTest
     /// far more often, and a client that ignores it waits for a header that never comes — which
     /// is how this was found: against real nodes, not here.
     /// </summary>
-    [Fact]
-    public async Task Read_DirectCommandEndsTheFraming()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Read_DirectCommandEndsTheFraming(bool sync)
     {
         const byte PaddingDirect = 0x02;
         byte[] wire =
@@ -151,7 +162,7 @@ public class VisionTest
 
         await using VisionStream stream = Wrap(wire, out _);
 
-        Assert.Equal("framedeverything after is raw", Encoding.ASCII.GetString(await ReadAllAsync(stream)));
+        Assert.Equal("framedeverything after is raw", Encoding.ASCII.GetString(await ReadAllAsync(stream, sync: sync)));
     }
 
     /// <summary>
@@ -159,18 +170,22 @@ public class VisionTest
     /// stream, not corrupted it. The distinction is the difference between a clean EOF and an
     /// exception on every completed download.
     /// </summary>
-    [Fact]
-    public async Task Read_CloseOnAFrameBoundaryIsACleanEnd()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Read_CloseOnAFrameBoundaryIsACleanEnd(bool sync)
     {
         byte[] wire = Frame(PaddingContinue, "all there is"u8, padding: 8, withUuid: true);
 
         await using VisionStream stream = Wrap(wire, out _);
 
-        Assert.Equal("all there is", Encoding.ASCII.GetString(await ReadAllAsync(stream)));
+        Assert.Equal("all there is", Encoding.ASCII.GetString(await ReadAllAsync(stream, sync: sync)));
     }
 
-    [Fact]
-    public async Task Read_TruncatedFrameThrows()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Read_TruncatedFrameThrows(bool sync)
     {
         // A header promising 100 bytes of content, with 4 delivered.
         byte[] wire = Frame(PaddingEnd, "abcd"u8, padding: 0, withUuid: true);
@@ -178,18 +193,28 @@ public class VisionTest
 
         await using VisionStream stream = Wrap(wire, out _);
 
-        await Assert.ThrowsAsync<EndOfStreamException>(async () => await ReadAllAsync(stream));
+        await Assert.ThrowsAsync<EndOfStreamException>(async () => await ReadAllAsync(stream, sync: sync));
     }
 
     // === writing ===
 
-    [Fact]
-    public async Task Write_PadsTheFirstWriteAndThenRunsRaw()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Write_PadsTheFirstWriteAndThenRunsRaw(bool sync)
     {
         await using VisionStream stream = Wrap([], out MemoryStream sent);
 
-        await stream.WriteAsync("GET / HTTP/1.1\r\n\r\n"u8.ToArray());
-        await stream.WriteAsync("second"u8.ToArray());
+        if (sync)
+        {
+            stream.Write("GET / HTTP/1.1\r\n\r\n"u8);
+            stream.Write("second"u8);
+        }
+        else
+        {
+            await stream.WriteAsync("GET / HTTP/1.1\r\n\r\n"u8.ToArray());
+            await stream.WriteAsync("second"u8.ToArray());
+        }
 
         byte[] written = sent.ToArray();
         Assert.Equal(UuidBigEndian, written[..16]);

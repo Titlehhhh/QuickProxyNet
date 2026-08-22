@@ -83,6 +83,20 @@ public sealed class EnvFactAttribute : FactAttribute
 }
 
 /// <summary>
+/// A <see cref="TheoryAttribute"/> that reports the test as <b>skipped</b> unless every named
+/// environment variable is set to a non-empty value. The theory counterpart of
+/// <see cref="EnvFactAttribute"/>: a <c>[Theory]</c> that returns early when the variable is
+/// missing reports as passed, which is the one outcome a gate exists to prevent.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class EnvTheoryAttribute : TheoryAttribute
+{
+    /// <param name="requiredVariables">Environment variables that must all be set.</param>
+    public EnvTheoryAttribute(params string[] requiredVariables) =>
+        Skip = SkipGates.RequireAll(requiredVariables);
+}
+
+/// <summary>
 /// A <see cref="FactAttribute"/> that reports the test as <b>skipped</b> unless at least one of
 /// the named environment variables is set to a non-empty value.
 /// </summary>

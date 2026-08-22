@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace QuickProxyNet.Reality;
+namespace QuickProxyNet;
 
 /// <summary>
 /// The application-data stream of a completed managed REALITY handshake.
@@ -226,8 +226,8 @@ internal sealed class RealityTlsStream : Stream
 
         if (disposing)
         {
-            _records.Dispose();
             _transport.Dispose();
+            _records.Dispose();
         }
 
         base.Dispose(disposing);
@@ -240,8 +240,13 @@ internal sealed class RealityTlsStream : Stream
 
         _disposed = true;
         _pending = ReadOnlyMemory<byte>.Empty;
-        _records.Dispose();
+
+        // Transport first: the record layer's inbound buffer may be the target of a read still
+        // in flight on another thread, and closing the transport is what ends that read. Only
+        // then can the buffers go back to the pool without a late completion landing in
+        // someone else's rental.
         await _transport.DisposeAsync().ConfigureAwait(false);
+        _records.Dispose();
 
         GC.SuppressFinalize(this);
     }
