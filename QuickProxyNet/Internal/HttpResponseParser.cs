@@ -88,6 +88,18 @@ internal struct HttpResponseParser : IDisposable
     }
 
     /// <summary>
+    /// The response header block, up to and including the terminating CRLFCRLF. Empty until
+    /// <see cref="Parse"/> has found the terminator.
+    /// </summary>
+    /// <remarks>
+    /// Header lookups must use this rather than <see cref="Span"/>: the latter also contains
+    /// any overread tunnel bytes, and matching a header name inside attacker-influenced
+    /// payload would let the peer forge a header value the parser never received.
+    /// </remarks>
+    public ReadOnlySpan<byte> Headers =>
+        _indexEnd < 0 ? ReadOnlySpan<byte>.Empty : _buffer.AsSpan(0, _indexEnd + 4);
+
+    /// <summary>
     /// True if bytes were read beyond the end of the HTTP response headers.
     /// These bytes belong to the tunneled connection and must be re-prepended to the stream.
     /// </summary>

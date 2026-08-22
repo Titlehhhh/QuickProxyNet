@@ -14,14 +14,99 @@ public sealed class ProxyClientFactory
     public static ProxyClientFactory Instance { get; } = new();
 
     /// <summary>
+    /// Creates an <see cref="IProxyClient"/> from a proxy URL or share link, whatever its scheme.
+    /// </summary>
+    /// <param name="link">
+    /// <c>http</c>, <c>https</c>, <c>socks4</c>, <c>socks4a</c>, <c>socks5</c>, <c>vless</c>,
+    /// <c>trojan</c> or <c>vmess</c>. Credentials in the authority are honoured for the classic
+    /// schemes; the rest carry their configuration in the link itself.
+    /// </param>
+    /// <returns>A client ready to <see cref="IProxyClient.ConnectAsync(string, int, CancellationToken)"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="link"/> is empty or has no scheme.</exception>
+    /// <exception cref="NotSupportedException">The scheme is not one this library speaks.</exception>
+    /// <exception cref="FormatException">The scheme is known but the link is malformed.</exception>
+    /// <remarks>
+    /// <para>
+    /// This is the entry point to reach for when all you have is a string. It reads the scheme
+    /// off the front of the text rather than going through <see cref="Uri"/>, which matters for
+    /// <c>vmess://</c>: those links are base64-encoded JSON, and <see cref="Uri"/> rejects most
+    /// real ones outright for exceeding its host-length limit or carrying base64 padding. Via
+    /// <see cref="Create(Uri)"/> such a link cannot even be represented, let alone parsed.
+    /// </para>
+    /// </remarks>
+    public IProxyClient Create(string link)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(link);
+
+        string trimmed = link.Trim();
+        int separator = trimmed.IndexOf("://", StringComparison.Ordinal);
+        if (separator <= 0)
+            throw new ArgumentException(
+                $"The proxy link ({trimmed.Length} characters) has no scheme: expected something like " +
+                "'socks5://host:port' or 'vless://...'.", nameof(link));
+
+        ReadOnlySpan<char> scheme = trimmed.AsSpan(0, separator);
+
+        // The share-link protocols carry everything in the text and are parsed from it directly.
+        if (scheme.Equals("vless", StringComparison.OrdinalIgnoreCase))
+            return new VlessClient(VlessShareLink.Parse(trimmed));
+
+        if (scheme.Equals("trojan", StringComparison.OrdinalIgnoreCase))
+            return new TrojanClient(TrojanShareLink.Parse(trimmed));
+
+        if (scheme.Equals("vmess", StringComparison.OrdinalIgnoreCase))
+            return new VmessClient(VmessShareLink.Parse(trimmed));
+
+        // The classic ones are host/port URIs, so they go through Uri for its authority parsing.
+        if (scheme.Equals("http", StringComparison.OrdinalIgnoreCase) ||
+            scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ||
+            scheme.Equals("socks4", StringComparison.OrdinalIgnoreCase) ||
+            scheme.Equals("socks4a", StringComparison.OrdinalIgnoreCase) ||
+            scheme.Equals("socks5", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? uri))
+                throw new FormatException(
+                    $"The {scheme} proxy link is not a well-formed URI (expected '{scheme}://[user:password@]host:port').");
+
+            return Create(uri);
+        }
+
+        throw new NotSupportedException(
+            $"Proxy scheme '{scheme}' is not supported. This library speaks http, https, socks4, " +
+            "socks4a, socks5, vless, trojan and vmess.");
+    }
+
+    /// <summary>
     /// Creates an IProxyClient instance based on the provided URI, automatically determining the proxy type
     /// and extracting credentials if they are present in the URI.
     /// </summary>
     /// <param name="proxyUri">The URI of the proxy server, including scheme, host, port, and optional credentials.</param>
     /// <returns>An instance of IProxyClient configured for the specified proxy.</returns>
     /// <exception cref="NotSupportedException">Thrown if the URI scheme is not supported.</exception>
+    /// <remarks>
+    /// <b>Note for <c>vmess://</c>:</b> a VMess share link is base64-encoded JSON rather
+    /// than a host/port URI, and <see cref="Uri"/> rejects a payload that is longer than
+    /// its host-length limit or that contains base64 padding — which covers most
+    /// real-world links. Such a link cannot be turned into a <see cref="Uri"/> at all, so
+    /// prefer <see cref="VmessClient.FromShareLink(string)"/> (or
+    /// <see cref="VmessShareLink.Parse(string)"/>) to parse the string directly. The
+    /// special case below exists for the short links that <em>are</em> representable.
+    /// </remarks>
     public IProxyClient Create(Uri proxyUri)
     {
+        // VLESS carries its whole configuration (uuid, security, sni, …) in the URI,
+        // so it is parsed as a share link rather than the generic host/port/credential path.
+        if (proxyUri.Scheme.Equals("vless", StringComparison.OrdinalIgnoreCase))
+            return new VlessClient(VlessShareLink.Parse(proxyUri.OriginalString));
+
+        // Trojan likewise carries its whole configuration (password, sni, alpn, …) in the URI.
+        if (proxyUri.Scheme.Equals("trojan", StringComparison.OrdinalIgnoreCase))
+            return new TrojanClient(TrojanShareLink.Parse(proxyUri.OriginalString));
+
+        // VMess carries its whole configuration as base64-encoded JSON in the URI body.
+        if (proxyUri.Scheme.Equals("vmess", StringComparison.OrdinalIgnoreCase))
+            return new VmessClient(VmessShareLink.Parse(proxyUri.OriginalString));
+
         NetworkCredential? credential = null;
         ProxyType type = proxyUri.Scheme switch
         {
@@ -30,7 +115,9 @@ public sealed class ProxyClientFactory
             "socks4" => ProxyType.Socks4,
             "socks4a" => ProxyType.Socks4a,
             "socks5" => ProxyType.Socks5,
-            _ => throw new NotSupportedException($"Scheme: {proxyUri.Scheme}")
+            _ => throw new NotSupportedException(
+                $"Proxy scheme '{proxyUri.Scheme}' is not supported. This library speaks http, https, socks4, " +
+                "socks4a, socks5, vless, trojan and vmess.")
         };
 
         if (!string.IsNullOrEmpty(proxyUri.UserInfo))

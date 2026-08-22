@@ -61,3 +61,7 @@
 #*.PDF   diff=astextplain
 #*.rtf   diff=astextplain
 #*.RTF   diff=astextplain
+
+# Docker integration-test assets are consumed inside Linux containers.
+# A CRLF checkout would break the shell script and confuse the servers.
+tests/docker/** text eol=lf

@@ -7,23 +7,19 @@ namespace QuickProxyNet.Tests;
 /// Set environment variables to run:
 ///   HTTP_PROXY_URI  = http://[user:pass@]host:port
 ///   SOCKS5_PROXY_URI = socks5://[user:pass@]host:port
-/// Tests are skipped if the variable is not set.
+/// A test whose variable is not set reports as <b>skipped</b> — never as passed.
 /// </summary>
 public class ConnectTest
 {
     private const string TargetHost = "example.com";
     private const int TargetPort = 80;
 
-    private static string? GetEnv(string name) =>
-        Environment.GetEnvironmentVariable(name) is { Length: > 0 } v ? v : null;
+    private static string Env(string name) => Environment.GetEnvironmentVariable(name)!;
 
-    [Fact]
+    [EnvFact("HTTP_PROXY_URI")]
     public async Task HttpProxy_ConnectAndSendRequest()
     {
-        var proxyUrl = GetEnv("HTTP_PROXY_URI");
-        if (proxyUrl is null) return; // skip: "HTTP_PROXY_URI not set");
-
-        var uri = new Uri(proxyUrl);
+        var uri = new Uri(Env("HTTP_PROXY_URI"));
         await using var stream = await Proxy.ConnectAsync(uri, TargetHost, TargetPort,
             TimeSpan.FromSeconds(10));
 
@@ -39,13 +35,10 @@ public class ConnectTest
         Assert.StartsWith("HTTP/1.", response);
     }
 
-    [Fact]
+    [EnvFact("SOCKS5_PROXY_URI")]
     public async Task Socks5Proxy_ConnectAndSendRequest()
     {
-        var proxyUrl = GetEnv("SOCKS5_PROXY_URI");
-        if (proxyUrl is null) return; // skip: "SOCKS5_PROXY_URI not set");
-
-        var uri = new Uri(proxyUrl);
+        var uri = new Uri(Env("SOCKS5_PROXY_URI"));
         await using var stream = await Proxy.ConnectAsync(uri, TargetHost, TargetPort,
             TimeSpan.FromSeconds(10));
 
@@ -60,11 +53,10 @@ public class ConnectTest
         Assert.StartsWith("HTTP/1.", response);
     }
 
-    [Fact]
+    [AnyEnvFact("HTTP_PROXY_URI", "SOCKS5_PROXY_URI")]
     public async Task ExtensionMethod_ConnectThroughProxy()
     {
-        var proxyUrl = GetEnv("HTTP_PROXY_URI") ?? GetEnv("SOCKS5_PROXY_URI");
-        if (proxyUrl is null) return; // skip: "No proxy URI set");
+        var proxyUrl = SkipGates.IsSet("HTTP_PROXY_URI") ? Env("HTTP_PROXY_URI") : Env("SOCKS5_PROXY_URI");
 
         var uri = new Uri(proxyUrl);
         await using var stream = await uri.ConnectThroughProxyAsync(TargetHost, TargetPort,

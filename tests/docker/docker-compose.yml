@@ -1,0 +1,80 @@
+# Integration-test servers for QuickProxyNet's VLESS / Trojan / VMess clients.
+#
+# ALWAYS drive this file with the fixed project name so nothing is orphaned:
+#
+#   docker compose -p quickproxynet-test -f tests/docker/docker-compose.yml up -d
+#   docker compose -p quickproxynet-test -f tests/docker/docker-compose.yml down -v
+#
+# See README.md in this directory for the host-port map and the credentials.
+
+services:
+  # Plain HTTP target the proxies forward to. alpine's busybox has no `httpd`
+  # applet, but `nc -lk ... -e PROG` is a persistent server that execs PROG per
+  # connection — a real accept loop, no gap between connections, no extra image.
+  echo:
+    image: alpine:3.20
+    container_name: quickproxynet-test-echo
+    # /bin/sh is named explicitly so the bind-mounted script does not need the
+    # executable bit (which does not survive a Windows checkout).
+    command: ["nc", "-lk", "-p", "8080", "-e", "/bin/sh", "/echo/serve.sh"]
+    volumes:
+      - ./echo/serve.sh:/echo/serve.sh:ro
+    networks:
+      - qpn
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "-T", "2", "http://127.0.0.1:8080/"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+
+  xray:
+    image: ghcr.io/xtls/xray-core:latest
+    container_name: quickproxynet-test-xray
+    command: ["-config", "/etc/xray/config.json"]
+    volumes:
+      - ./xray/config.json:/etc/xray/config.json:ro
+      - ./certs:/certs:ro
+    ports:
+      - "24801:10001"   # vless, security=none
+      - "24802:10002"   # vless, security=tls
+      - "24803:10003"   # trojan (tls)
+      - "24804:10004"   # vmess, driven with aes-128-gcm
+      - "24805:10005"   # vmess, driven with chacha20-poly1305
+      - "24806:10006"   # vless, security=none, NON-UUID user id "not-a-uuid"
+      - "24807:10007"   # vless over ws, path /qpn-ws
+      - "24808:10008"   # vmess over ws, path /qpn-vmess-ws
+      - "24809:10009"   # trojan over ws + tls, path /qpn-trojan-ws
+      - "24810:10010"   # vless over httpupgrade, path /qpn-hu
+    depends_on:
+      echo:
+        condition: service_healthy
+    networks:
+      - qpn
+
+  singbox:
+    image: ghcr.io/sagernet/sing-box:latest
+    container_name: quickproxynet-test-singbox
+    command: ["-c", "/etc/sing-box/config.json", "run"]
+    volumes:
+      - ./singbox/config.json:/etc/sing-box/config.json:ro
+      - ./certs:/certs:ro
+    ports:
+      - "24811:10001"   # vless, security=none
+      - "24812:10002"   # vless, security=tls
+      - "24813:10003"   # trojan (tls)
+      - "24814:10004"   # vmess, driven with aes-128-gcm
+      - "24815:10005"   # vmess, driven with chacha20-poly1305
+      - "24817:10007"   # vless over ws, path /qpn-ws
+      - "24818:10008"   # vmess over ws, path /qpn-vmess-ws
+      - "24819:10009"   # trojan over ws + tls, path /qpn-trojan-ws
+      - "24820:10010"   # vless over httpupgrade, path /qpn-hu
+    depends_on:
+      echo:
+        condition: service_healthy
+    networks:
+      - qpn
+
+networks:
+  qpn:
+    driver: bridge

@@ -1,4 +1,4 @@
-﻿namespace QuickProxyNet;
+namespace QuickProxyNet;
 
 public enum ProxyType
 {
@@ -6,5 +6,8 @@ public enum ProxyType
     Https,
     Socks4,
     Socks4a,
-    Socks5
+    Socks5,
+    Vless,
+    Vmess,
+    Trojan
 }

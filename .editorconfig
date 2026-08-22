@@ -1,0 +1,9 @@
+root = true
+
+[*.cs]
+# QuickProxyNet deliberately uses a single flat namespace (QuickProxyNet) for every
+# type, so files can be organised into folders (e.g. Internal/Crypto, Internal/Vmess)
+# without changing the public API surface or forcing 'using' churn on consumers.
+# Suppress the "namespace should match folder structure" guidance accordingly.
+dotnet_style_namespace_match_folder = false
+dotnet_diagnostic.IDE0130.severity = none

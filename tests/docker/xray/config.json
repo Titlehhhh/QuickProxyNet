@@ -1,0 +1,237 @@
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "tag": "vless-none",
+      "listen": "0.0.0.0",
+      "port": 10001,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "none"
+      }
+    },
+    {
+      "tag": "vless-tls",
+      "listen": "0.0.0.0",
+      "port": 10002,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "qpn.test",
+          "certificates": [
+            {
+              "certificateFile": "/certs/server.crt",
+              "keyFile": "/certs/server.key"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tag": "trojan",
+      "listen": "0.0.0.0",
+      "port": 10003,
+      "protocol": "trojan",
+      "settings": {
+        "clients": [
+          {
+            "password": "qpn-test-trojan-password"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "qpn.test",
+          "certificates": [
+            {
+              "certificateFile": "/certs/server.crt",
+              "keyFile": "/certs/server.key"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tag": "vmess-aes",
+      "listen": "0.0.0.0",
+      "port": 10004,
+      "protocol": "vmess",
+      "settings": {
+        "clients": [
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "alterId": 0
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "none"
+      }
+    },
+    {
+      "tag": "vmess-chacha",
+      "listen": "0.0.0.0",
+      "port": 10005,
+      "protocol": "vmess",
+      "settings": {
+        "clients": [
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "alterId": 0
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "none"
+      }
+    },
+    {
+      "tag": "vless-ws",
+      "listen": "0.0.0.0",
+      "port": 10007,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "55555555-5555-4555-8555-555555555555"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": {
+          "path": "/qpn-ws"
+        }
+      }
+    },
+    {
+      "tag": "vmess-ws",
+      "listen": "0.0.0.0",
+      "port": 10008,
+      "protocol": "vmess",
+      "settings": {
+        "clients": [
+          {
+            "id": "66666666-6666-4666-8666-666666666666",
+            "alterId": 0
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": {
+          "path": "/qpn-vmess-ws"
+        }
+      }
+    },
+    {
+      "tag": "trojan-ws",
+      "listen": "0.0.0.0",
+      "port": 10009,
+      "protocol": "trojan",
+      "settings": {
+        "clients": [
+          {
+            "password": "qpn-test-trojan-password"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "wsSettings": {
+          "path": "/qpn-trojan-ws"
+        },
+        "tlsSettings": {
+          "serverName": "qpn.test",
+          "certificates": [
+            {
+              "certificateFile": "/certs/server.crt",
+              "keyFile": "/certs/server.key"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tag": "vless-httpupgrade",
+      "listen": "0.0.0.0",
+      "port": 10010,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "77777777-7777-4777-8777-777777777777"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "httpupgrade",
+        "security": "none",
+        "httpupgradeSettings": {
+          "path": "/qpn-hu"
+        }
+      }
+    },
+    {
+      "tag": "vless-nonuuid",
+      "listen": "0.0.0.0",
+      "port": 10006,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "not-a-uuid"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "none"
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {
+        "finalRules": [
+          {
+            "action": "allow"
+          }
+        ]
+      }
+    }
+  ]
+}

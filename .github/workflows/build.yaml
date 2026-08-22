@@ -20,6 +20,15 @@ jobs:
             9.x
             10.x
 
+      # Separate step: dotnet-quality applies to every version in a step's list, and
+      # there is no preview channel for the GA releases above, so asking for one there
+      # fails the install. setup-dotnet accumulates SDKs across steps.
+      - name: Setup .NET 11 (preview)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 11.0.x
+          dotnet-quality: preview
+
       - name: Restore
         run: dotnet restore
 
