@@ -196,6 +196,43 @@ public class VisionTest
         await Assert.ThrowsAsync<EndOfStreamException>(async () => await ReadAllAsync(stream, sync: sync));
     }
 
+    /// <summary>
+    /// Padding-only frames are legal and Xray sends one or two. Sixty-five in a row is a peer
+    /// keeping a read from returning, and the read must end in an error rather than never.
+    /// </summary>
+    [Fact]
+    public async Task Read_PaddingOnlyFrameFlood_IsRefused()
+    {
+        var wire = new List<byte>();
+        wire.AddRange(Frame(PaddingContinue, ReadOnlySpan<byte>.Empty, padding: 8, withUuid: true));
+        for (int i = 0; i < 100; i++)
+            wire.AddRange(Frame(PaddingContinue, ReadOnlySpan<byte>.Empty, padding: 8, withUuid: false));
+        wire.AddRange(Frame(PaddingEnd, "late"u8, padding: 0, withUuid: false));
+
+        await using VisionStream stream = Wrap([.. wire], out _);
+
+        var ex = await Assert.ThrowsAsync<ProxyProtocolException>(async () => await ReadAllAsync(stream));
+        Assert.Equal(ProxyErrorCode.InvalidResponse, ex.ErrorCode);
+    }
+
+    /// <summary>
+    /// A server that is not framing and answers with fewer than 21 bytes — then waits for the
+    /// client — must have those bytes delivered, not held until a header that is never coming.
+    /// The first byte that is not the UUID already settles the question.
+    /// </summary>
+    [Fact]
+    public async Task Read_ShortNonVisionAnswer_IsDeliveredWithoutWaitingForAFullHeader()
+    {
+        var source = new StallingStream("+OK\r\n"u8.ToArray());
+        await using var stream = new VisionStream(source, UuidBigEndian);
+
+        byte[] buffer = new byte[64];
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        int n = await stream.ReadAsync(buffer, timeout.Token);
+
+        Assert.Equal("+OK\r\n", Encoding.ASCII.GetString(buffer, 0, n));
+    }
+
     // === writing ===
 
     [Theory]
@@ -302,6 +339,45 @@ public class VisionTest
         Assert.False(VlessHelper.IsVision("XTLS-RPRX-VISION"));
         Assert.False(VlessHelper.IsVision(null));
         Assert.False(VlessHelper.IsVision(""));
+    }
+
+    /// <summary>Hands out one chunk, then blocks like a peer that is waiting for its turn.</summary>
+    private sealed class StallingStream(byte[] first) : Stream
+    {
+        private bool _served;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (!_served)
+            {
+                _served = true;
+                int n = Math.Min(buffer.Length, first.Length);
+                first.AsSpan(0, n).CopyTo(buffer.Span);
+                return n;
+            }
+
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+        public override void Write(byte[] buffer, int offset, int count) { }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
     }
 
     /// <summary>A stream that reads from a fixed script and records what was written.</summary>

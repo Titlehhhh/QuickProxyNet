@@ -284,15 +284,36 @@ public class HostilePeerTest
         Assert.Contains("ChangeCipherSpec", ex.Message);
     }
 
-    /// <summary>A peer that hangs up mid-handshake must not be reported as anything else.</summary>
+    /// <summary>
+    /// A peer that hangs up mid-handshake is reported as a proxy error with the connection-failed
+    /// code and a hint — this is exactly what a REALITY server with no fallback does to a client
+    /// it does not recognise, so "EndOfStreamException" would be the least useful possible answer.
+    /// </summary>
     [Fact]
-    public async Task PeerThatSaysNothing_Fails()
+    public async Task PeerThatHangsUp_IsConnectionFailedWithAHint()
     {
         await using var peer = new ScriptedPeer(_ => []);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
-        await Assert.ThrowsAnyAsync<Exception>(
+        var ex = await Assert.ThrowsAsync<RealityHandshakeException>(
             async () => await RealityTlsClient.HandshakeAsync(peer, Options(), timeout.Token));
+
+        Assert.Equal(ProxyErrorCode.ConnectionFailed, ex.ErrorCode);
+        Assert.Contains("pbk", ex.Message);
+        Assert.IsType<EndOfStreamException>(ex.InnerException);
+    }
+
+    /// <summary>
+    /// RFC 8446 §5.1 forbids zero-length handshake records. One is harmless; a peer can send them
+    /// forever, and each used to cost the client a loop iteration and nothing else.
+    /// </summary>
+    [Fact]
+    public async Task EmptyHandshakeRecord_IsRefused()
+    {
+        RealityHandshakeException ex = await ExpectRefusalAsync(_ =>
+            Record(TlsContentTypeForTests.Handshake, ReadOnlySpan<byte>.Empty));
+
+        Assert.Contains("zero-length", ex.Message);
     }
 
     /// <summary>

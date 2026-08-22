@@ -63,6 +63,12 @@ internal sealed class RealityTlsClient
 
     private const string Ed25519Oid = "1.3.101.112";
 
+    /// <summary>
+    /// Cap on handshake messages in the server's flight. Four is the real number; the margin is
+    /// for servers that are odd rather than hostile.
+    /// </summary>
+    private const int MaxFlightMessages = 8;
+
     /// <summary>The one-byte ChangeCipherSpec payload, which never varies.</summary>
     private static readonly byte[] ChangeCipherSpecPayload = [1];
 
@@ -190,10 +196,19 @@ internal sealed class RealityTlsClient
                 // ---- Server flight ----
                 byte[]? leafCertificate = null;
                 bool serverFinished = false;
+                int flightMessages = 0;
 
                 while (!serverFinished)
                 {
                     HandshakeMessage message = await messages.NextAsync(cancellationToken).ConfigureAwait(false);
+
+                    // A real flight is EncryptedExtensions, Certificate, CertificateVerify,
+                    // Finished — four messages. A peer that keeps sending valid-looking ones
+                    // and never a Finished would otherwise hold this loop open for as long as
+                    // it cares to; nothing it sends costs us memory, only time without end.
+                    if (++flightMessages > MaxFlightMessages)
+                        throw new RealityHandshakeException(
+                            $"The server sent more than {MaxFlightMessages} handshake messages without a Finished.");
 
                     switch (message.Type)
                     {
@@ -267,6 +282,16 @@ internal sealed class RealityTlsClient
             {
                 secrets.Return();
             }
+        }
+        catch (EndOfStreamException ex)
+        {
+            records.Dispose();
+            // The peer hung up before the handshake finished. A REALITY server with no fallback
+            // does exactly this when it does not recognise the client, so the hint matters.
+            throw new RealityHandshakeException(ProxyErrorCode.ConnectionFailed,
+                "The server closed the connection in the middle of the TLS handshake. For a REALITY " +
+                "server that usually means it did not accept the client: check pbk, sid and sni, and " +
+                "that this machine's clock is roughly right.", ex);
         }
         catch
         {
@@ -568,10 +593,17 @@ internal sealed class RealityTlsClient
         /// </remarks>
         private const int MaxChangeCipherSpec = 8;
 
+        /// <summary>
+        /// Cap on empty application-data records during the handshake. Each is legal on its own
+        /// and carries nothing; a stream of them is a peer keeping us busy.
+        /// </summary>
+        private const int MaxEmptyRecords = 64;
+
         private byte[] _buffer = ArrayPool<byte>.Shared.Rent(TlsRecordStream.MaxCiphertext);
         private int _length;
         private int _consumed;
         private int _changeCipherSpecSeen;
+        private int _emptyRecordsSeen;
 
         /// <summary>Application data that arrived before the handshake finished.</summary>
         public List<byte> Leftover { get; } = [];
@@ -628,6 +660,11 @@ internal sealed class RealityTlsClient
                             "than passed to the caller.");
 
                     case TlsContentType.ApplicationData:
+                        if (record.Payload.IsEmpty && ++_emptyRecordsSeen > MaxEmptyRecords)
+                            throw new RealityHandshakeException(
+                                $"The peer sent more than {MaxEmptyRecords} empty application-data records " +
+                                "during the handshake.");
+
                         if (Leftover.Count + record.Payload.Length > MaxLeftover)
                             throw new RealityHandshakeException(
                                 $"The peer sent more than {MaxLeftover} bytes of application data before " +
@@ -637,6 +674,12 @@ internal sealed class RealityTlsClient
                         continue;
 
                     case TlsContentType.Handshake:
+                        // RFC 8446 §5.1: zero-length handshake records are forbidden. Accepting
+                        // one is harmless; accepting them without end is a peer's free spin.
+                        if (record.Payload.IsEmpty)
+                            throw new RealityHandshakeException(
+                                "The peer sent a zero-length handshake record, which TLS 1.3 forbids.");
+
                         Append(record.Payload.Span);
                         continue;
 
@@ -739,6 +782,15 @@ public sealed class RealityHandshakeException : ProxyProtocolException
     /// <param name="innerException">The underlying failure.</param>
     public RealityHandshakeException(string message, Exception innerException)
         : base(ProxyErrorCode.InvalidResponse, message, innerException)
+    {
+    }
+
+    /// <summary>Creates the exception with an explicit code and an underlying failure.</summary>
+    /// <param name="errorCode">Why, in terms a caller can branch on.</param>
+    /// <param name="message">What went wrong.</param>
+    /// <param name="innerException">The underlying failure.</param>
+    public RealityHandshakeException(ProxyErrorCode errorCode, string message, Exception innerException)
+        : base(errorCode, message, innerException)
     {
     }
 }

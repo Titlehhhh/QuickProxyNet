@@ -598,7 +598,7 @@ public class VmessBodyTest
         var transport = new DuplexTestStream(wire);
         var stream = ClientStream(transport);
 
-        await Assert.ThrowsAsync<AuthenticationTagMismatchException>(async () =>
+        await Assert.ThrowsAsync<ProxyProtocolException>(async () =>
             await stream.ReadAsync(new byte[64]));
     }
 
@@ -611,7 +611,7 @@ public class VmessBodyTest
         var stream = ClientStream(transport);
 
         // The empty chunk is authenticated: a broken tag must not be reported as EOF.
-        await Assert.ThrowsAsync<AuthenticationTagMismatchException>(async () =>
+        await Assert.ThrowsAsync<ProxyProtocolException>(async () =>
             await stream.ReadAsync(new byte[64]));
         Assert.False(stream.IsReadCompleted);
     }
@@ -623,7 +623,7 @@ public class VmessBodyTest
         var transport = new DuplexTestStream(Hex(RespAesChunk1));
         var stream = ClientStream(transport);
 
-        await Assert.ThrowsAsync<AuthenticationTagMismatchException>(async () =>
+        await Assert.ThrowsAsync<ProxyProtocolException>(async () =>
             await stream.ReadAsync(new byte[64]));
     }
 
@@ -865,7 +865,7 @@ public class VmessBodyTest
         var transport = new DuplexTestStream(Hex(ReqAesChunk0));
         var stream = ClientStream(transport);
 
-        await Assert.ThrowsAsync<AuthenticationTagMismatchException>(async () =>
+        await Assert.ThrowsAsync<ProxyProtocolException>(async () =>
             await stream.ReadAsync(new byte[64]));
     }
 

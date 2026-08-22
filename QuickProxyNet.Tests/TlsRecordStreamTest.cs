@@ -351,6 +351,48 @@ public class TlsRecordStreamTest
         Assert.Equal(ProxyErrorCode.InvalidResponse, ex.ErrorCode);
     }
 
+    /// <summary>
+    /// After the handshake, a peer can send empty application-data records — each legal, each
+    /// carrying nothing — without end. The stream's read must give up on them, not wait for a
+    /// non-empty one that is never coming.
+    /// </summary>
+    [Fact]
+    public async Task AfterHandshake_EmptyRecordFlood_EndsTheReadInAnError()
+    {
+        TlsCipherSuite suite = Suite(Aes128Gcm);
+        byte[] secret = Secret(suite);
+
+        // One sealed record whose only inner byte is the content type: application data, empty.
+        byte[] inner = [23];
+        var wire = new MemoryStream();
+        using (var protection = new TlsRecordProtection(suite, secret))
+        {
+            for (int i = 0; i < 100; i++)
+            {
+                byte[] record = new byte[5 + inner.Length + TlsCipherSuite.TagLength];
+                record[0] = 23;
+                record[1] = 3;
+                record[2] = 3;
+                record[3] = (byte)((inner.Length + TlsCipherSuite.TagLength) >> 8);
+                record[4] = (byte)(inner.Length + TlsCipherSuite.TagLength);
+                protection.Protect(
+                    inner,
+                    record.AsSpan(5, inner.Length),
+                    record.AsSpan(5 + inner.Length, TlsCipherSuite.TagLength),
+                    record.AsSpan(0, 5));
+                wire.Write(record);
+            }
+        }
+
+        var transport = new MemoryStream(wire.ToArray());
+        var records = new TlsRecordStream(transport) { Read = new TlsRecordProtection(suite, secret) };
+        await using var tls = new RealityTlsStream(transport, records, []);
+
+        var ex = await Assert.ThrowsAsync<RealityHandshakeException>(async () =>
+            await tls.ReadAsync(new byte[64]));
+        Assert.Contains("no application data", ex.Message);
+    }
+
     /// <summary>A tampered record does not open.</summary>
     [Fact]
     public async Task TamperedRecord_FailsItsTagCheck()

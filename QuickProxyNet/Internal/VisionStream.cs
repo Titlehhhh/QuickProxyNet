@@ -54,6 +54,13 @@ internal sealed class VisionStream : Stream
     /// <summary>Xray's <c>buf.Size</c>, which bounds one padded frame.</summary>
     private const int MaxFrame = 8192;
 
+    /// <summary>
+    /// Consecutive frames carrying padding and no content before the stream is declared
+    /// broken. Xray sends one or two; a peer sending them without end would otherwise keep a
+    /// read from ever returning.
+    /// </summary>
+    private const int MaxPaddingOnlyFrames = 64;
+
     private enum Mode
     {
         /// <summary>Nothing read yet: the leading UUID decides whether this stream is framed.</summary>
@@ -78,6 +85,7 @@ internal sealed class VisionStream : Stream
     private byte _command = CommandPaddingContinue;
     private int _remainingContent;
     private int _remainingPadding;
+    private int _paddingOnlyFrames;
 
     private bool _uplinkPadded;
     private bool _disposed;
@@ -139,10 +147,19 @@ internal sealed class VisionStream : Stream
 
             if (_mode == Mode.Undecided)
             {
-                // The decision needs a whole first frame header. A stream that ends before then
-                // was never framed, so whatever arrived is payload.
-                await FillAsync(UuidSize + HeaderSize, throwOnEof: false, cancellationToken).ConfigureAwait(false);
-                DecideMode();
+                // Decide from as few bytes as settle it. A full first frame header is needed to
+                // enter framed mode, but one byte that is not the UUID is enough to know the
+                // server is not framing — and waiting for 21 bytes from a server that sent a
+                // 5-byte greeting and is now waiting for us would be a deadlock.
+                while (!TryDecideMode())
+                {
+                    if (await FillSomeAsync(cancellationToken).ConfigureAwait(false) == 0)
+                    {
+                        _mode = Mode.Raw; // ended before a frame could exist: whatever came is payload
+                        break;
+                    }
+                }
+
                 continue;
             }
 
@@ -202,8 +219,15 @@ internal sealed class VisionStream : Stream
 
             if (_mode == Mode.Undecided)
             {
-                Fill(UuidSize + HeaderSize, throwOnEof: false);
-                DecideMode();
+                while (!TryDecideMode())
+                {
+                    if (FillSome() == 0)
+                    {
+                        _mode = Mode.Raw;
+                        break;
+                    }
+                }
+
                 continue;
             }
 
@@ -248,20 +272,27 @@ internal sealed class VisionStream : Stream
     public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
 
     /// <summary>
-    /// Decides, from the bytes buffered so far, whether the peer is speaking Vision framing.
+    /// Tries to decide, from the bytes buffered so far, whether the peer is speaking Vision
+    /// framing. Returns false when more bytes are needed to tell.
     /// </summary>
-    private void DecideMode()
+    private bool TryDecideMode()
     {
-        if (Buffered >= UuidSize + HeaderSize && _buffer.AsSpan(_start, UuidSize).SequenceEqual(_uuid))
+        int compared = Math.Min(Buffered, UuidSize);
+        if (compared > 0 && !_buffer.AsSpan(_start, compared).SequenceEqual(_uuid.AsSpan(0, compared)))
         {
-            _start += UuidSize;
-            _mode = Mode.Framed;
-            return;
+            // Not our UUID — the server answered in plain VLESS despite the flow, which is what
+            // a non-Vision server does. Everything buffered is payload, and nothing more needs
+            // to arrive to know that.
+            _mode = Mode.Raw;
+            return true;
         }
 
-        // Not our UUID — the server answered in plain VLESS despite the flow, which is what a
-        // non-Vision server does. Everything buffered is payload.
-        _mode = Mode.Raw;
+        if (Buffered < UuidSize + HeaderSize)
+            return false; // the UUID matches so far; framed mode needs the whole first header
+
+        _start += UuidSize;
+        _mode = Mode.Framed;
+        return true;
     }
 
     /// <summary>Whether <paramref name="command"/> was the last framed packet.</summary>
@@ -275,6 +306,12 @@ internal sealed class VisionStream : Stream
         _remainingContent = BinaryPrimitives.ReadUInt16BigEndian(header[1..]);
         _remainingPadding = BinaryPrimitives.ReadUInt16BigEndian(header[3..]);
         _start += HeaderSize;
+
+        if (_remainingContent > 0)
+            _paddingOnlyFrames = 0;
+        else if (++_paddingOnlyFrames > MaxPaddingOnlyFrames)
+            throw new ProxyProtocolException(ProxyErrorCode.InvalidResponse,
+                $"The VLESS server sent {MaxPaddingOnlyFrames} consecutive xtls-rprx-vision frames with no content.");
     }
 
     private int DrainInto(Span<byte> destination)

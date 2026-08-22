@@ -35,6 +35,11 @@ internal sealed class RealityTlsStream : Stream
     private bool _receivedCloseNotify;
     private bool _disposed;
 
+    /// <summary>Consecutive records without application data before the read gives up.</summary>
+    private const int MaxRecordsWithoutData = 64;
+
+    private int _recordsWithoutData;
+
     internal RealityTlsStream(Stream transport, TlsRecordStream records, List<byte> leftover)
     {
         _transport = transport;
@@ -128,15 +133,18 @@ internal sealed class RealityTlsStream : Stream
             switch (record.Type)
             {
                 case TlsContentType.ApplicationData when !record.Payload.IsEmpty:
+                    _recordsWithoutData = 0;
                     _pending = record.Payload;
                     return true;
 
                 case TlsContentType.ApplicationData:
                 case TlsContentType.ChangeCipherSpec:
+                    CountRecordWithoutData();
                     continue;
 
                 case TlsContentType.Handshake:
                     SkipPostHandshakeMessage(record.Payload.Span);
+                    CountRecordWithoutData();
                     continue;
 
                 case TlsContentType.Alert:
@@ -156,6 +164,18 @@ internal sealed class RealityTlsStream : Stream
                     throw new RealityHandshakeException($"Unexpected record type {record.Type} after the handshake.");
             }
         }
+    }
+
+    /// <summary>
+    /// Empty records, ChangeCipherSpec and post-handshake tickets are each legal and each
+    /// carries no application data. A peer that sends nothing else would otherwise keep
+    /// <c>ReadAsync</c> from ever returning — not a leak, just a read that never ends.
+    /// </summary>
+    private void CountRecordWithoutData()
+    {
+        if (++_recordsWithoutData > MaxRecordsWithoutData)
+            throw new RealityHandshakeException(
+                $"The server sent {MaxRecordsWithoutData} consecutive TLS records carrying no application data.");
     }
 
     private static void SkipPostHandshakeMessage(ReadOnlySpan<byte> payload)

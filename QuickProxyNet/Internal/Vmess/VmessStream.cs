@@ -45,8 +45,9 @@ internal enum VmessSecurity : byte
 /// the 16-byte tag of an empty plaintext). <see cref="ReadAsync(Memory{byte},CancellationToken)"/>
 /// returns <c>0</c> only after opening such a chunk. A short read of the length prefix or
 /// of a chunk body is truncation and raises <see cref="EndOfStreamException"/>; a failed
-/// tag check raises <see cref="AuthenticationTagMismatchException"/>. Neither is ever
-/// reported as a clean end of stream.
+/// tag check raises <see cref="ProxyProtocolException"/> with
+/// <see cref="ProxyErrorCode.InvalidResponse"/> (the AEAD exception is its inner). Neither is
+/// ever reported as a clean end of stream.
 /// </para>
 /// </remarks>
 internal sealed class VmessStream : Stream
@@ -286,10 +287,22 @@ internal sealed class VmessStream : Stream
     private void OpenChunk(int sealedLength, Memory<byte> plaintext)
     {
         int plaintextLength = sealedLength - TagSize;
-        _reader.Open(
-            _receiveSealed!.AsSpan(0, plaintextLength),
-            _receiveSealed.AsSpan(plaintextLength, TagSize),
-            plaintext.Span);
+        try
+        {
+            _reader.Open(
+                _receiveSealed!.AsSpan(0, plaintextLength),
+                _receiveSealed.AsSpan(plaintextLength, TagSize),
+                plaintext.Span);
+        }
+        catch (CryptographicException ex)
+        {
+            // The nonce has already advanced, so nothing after this chunk can be opened either:
+            // the stream is over. A caller reading a Stream expects a proxy error here, not an
+            // AEAD primitive's exception.
+            throw new ProxyProtocolException(ProxyErrorCode.InvalidResponse,
+                "A VMess data chunk failed authentication: it was not sealed with this session's keys " +
+                "or was altered in transit. The stream cannot continue.", ex);
+        }
     }
 
     // ================================ writing ================================

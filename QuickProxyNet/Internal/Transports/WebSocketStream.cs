@@ -21,6 +21,9 @@ namespace QuickProxyNet;
 /// </remarks>
 internal sealed class WebSocketStream : Stream
 {
+    /// <summary>Consecutive empty frames one read tolerates before giving up on the peer.</summary>
+    private const int MaxEmptyFrames = 64;
+
     private readonly WebSocket _webSocket;
     private readonly Stream _inner;
     private bool _receivedClose;
@@ -62,7 +65,10 @@ internal sealed class WebSocketStream : Stream
 
         // A zero-length binary frame is legal and carries no data. Returning its 0 verbatim
         // would tell the caller the stream ended, silently truncating the tunnel — so keep
-        // receiving until there are actual bytes or the peer closes.
+        // receiving until there are actual bytes or the peer closes. Bounded, because a peer
+        // sending nothing but empty frames (or pings, which the BCL answers inside ReceiveAsync)
+        // would otherwise keep this read from returning.
+        int emptyFrames = 0;
         while (true)
         {
             ValueWebSocketReceiveResult result;
@@ -86,6 +92,10 @@ internal sealed class WebSocketStream : Stream
 
             if (result.Count > 0)
                 return result.Count;
+
+            if (++emptyFrames > MaxEmptyFrames)
+                throw new ProxyProtocolException(ProxyErrorCode.InvalidResponse,
+                    $"The WebSocket peer sent {MaxEmptyFrames} consecutive frames carrying no data.");
         }
     }
 
