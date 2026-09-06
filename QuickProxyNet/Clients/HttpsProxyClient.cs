@@ -56,7 +56,8 @@ public class HttpsProxyClient : ProxyClient
         var ssl = new SslStream(stream, false);
         try
         {
-            await ssl.AuthenticateAsClientAsync(GetSslClientAuthenticationOptions(host), cancellationToken);
+            await TlsHandshake.AuthenticateAsync(
+                ssl, GetSslClientAuthenticationOptions(host), $"{ProxyHost}:{ProxyPort}", cancellationToken);
         }
         catch
         {

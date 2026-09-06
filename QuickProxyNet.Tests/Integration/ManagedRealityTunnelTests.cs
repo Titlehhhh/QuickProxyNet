@@ -84,7 +84,7 @@ public class ManagedRealityTunnelTests
 
     /// <summary>
     /// The same tunnel, but opened the way a user opens it: a share link into
-    /// <see cref="ProxyClientFactory"/>, <c>ConnectAsync</c>, a stream back. Everything the
+    /// <see cref="Proxy"/>, <c>ConnectAsync</c>, a stream back. Everything the
     /// direct tests above bypass — <c>VlessClient.ConnectAsync</c>, its REALITY branch, the
     /// option mapping from the link, the flow wrapping — is on this path and nowhere else.
     /// </summary>
@@ -95,7 +95,7 @@ public class ManagedRealityTunnelTests
         await using LocalRealityServer server = await LocalRealityServer.StartAsync(Executable);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
-        IProxyClient client = ProxyClientFactory.Instance.Create(server.ShareLink());
+        IProxyClient client = Proxy.Create(server.ShareLink());
         await using Stream tunnel = await client.ConnectAsync("127.0.0.1", echo.Port, timeout.Token);
 
         Assert.Contains(LoopbackEchoServer.Body, await GetAsync(server, tunnel, "/", timeout.Token));

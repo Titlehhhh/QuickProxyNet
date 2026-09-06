@@ -85,7 +85,8 @@ public sealed class VlessClient : ProxyClient
                 // SslStream(leaveInnerStreamOpen:false) disposes the inner stream too.
                 var ssl = new SslStream(layered, leaveInnerStreamOpen: false);
                 layered = ssl;
-                await ssl.AuthenticateAsClientAsync(BuildSslOptions(), cancellationToken).ConfigureAwait(false);
+                await TlsHandshake.AuthenticateAsync(
+                    ssl, BuildSslOptions(), Options.Sni ?? Options.Host, cancellationToken).ConfigureAwait(false);
             }
             else if (Options.Security == VlessSecurity.Reality)
             {

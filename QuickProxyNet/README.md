@@ -34,7 +34,7 @@ await using var stream = await new Uri("http://proxy:8080")
 - VLESS REALITY and `xtls-rprx-vision` in-process, no Xray binary
 - Structured errors: `ProxyProtocolException` with `ProxyErrorCode` enum
 - Per-connection timeouts with `ProxyErrorCode.Timeout`
-- Static API (`Proxy.ConnectAsync`) and factory API (`ProxyClientFactory.Instance.Create(link)`)
+- Static API (`Proxy.ConnectAsync`) and factory API (`Proxy.Create(link)`)
 
 ## Error Handling
 

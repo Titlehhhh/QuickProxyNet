@@ -59,5 +59,10 @@ public enum ProxyErrorCode
     /// The HTTP upgrade to an alternate transport (<c>ws</c>, <c>httpupgrade</c>) failed — the
     /// server refused it, or answered something that is not a WebSocket handshake.
     /// </summary>
-    TransportUpgradeFailed
+    TransportUpgradeFailed,
+    /// <summary>
+    /// The TLS handshake with the proxy failed: an untrusted or expired certificate, a name the
+    /// server will not serve, or no shared cipher suite.
+    /// </summary>
+    TlsHandshakeFailed
 }

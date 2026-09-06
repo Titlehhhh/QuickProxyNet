@@ -502,7 +502,7 @@ public class VlessTest
     [Fact]
     public void Factory_CreatesVlessClient()
     {
-        var client = ProxyClientFactory.Instance.Create(
+        var client = Proxy.Create(
             new Uri($"vless://{Uuid}@example.com:443?security=tls&sni=a.com"));
         var vless = Assert.IsType<VlessClient>(client);
         Assert.Equal(ProxyType.Vless, vless.Type);

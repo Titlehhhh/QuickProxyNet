@@ -74,7 +74,7 @@ QuickProxyNet/
 
 Публичная поверхность фазы 1: `ProxyType.Vless`, `VlessClient`,
 `VlessOptions`, `VlessShareLink.Parse(...)`, регистрация схемы `vless` в
-`ProxyClientFactory`.
+`Proxy`.
 
 ### 2.3 Поток VLESS
 
@@ -160,7 +160,7 @@ BenchmarkDotNet 0.15.8, .NET 10, Xeon E5-2697 v4, ShortRun/InProcessNoEmit
 - [ ] `Configs/VlessOptions` + `VlessShareLink.Parse` + тесты на корпусе
 - [ ] `Internal/VlessHelper` (build request / read response) + тесты через `FakeProxyStream`
 - [ ] `Clients/VlessClient` (none + tls)
-- [ ] wiring: `ProxyConnector` (для none), `ProxyClientFactory` (схема `vless`)
+- [ ] wiring: `ProxyConnector` (для none), `Proxy` (схема `vless`)
 - [ ] бенчи: UUID, header build, share-link parse — прогнать, записать числа
 
 **Фаза 2 — Trojan:** `Internal/Sha224` + тесты (вектора NIST) + бенч,
@@ -312,7 +312,7 @@ HMAC-SHA512. Всё, кроме X25519, есть в платформе. Слож
 ### Публичная форма — решено
 
 Внутрь `VlessClient`: `security=reality` в `VlessOptions`, или просто ссылка в
-`ProxyClientFactory.Create(string)` / `Proxy.ConnectAsync(string, …)`. Отдельный
+`Proxy.Create(string)` / `Proxy.ConnectAsync(string, …)`. Отдельный
 `RealityClient` и третий пакет отвергнуты — у пользователя в руках `vless://`-ссылка,
 и она сама говорит, какой режим безопасности нужен. Наружу из `Internal/Reality/`
 торчит только `RealityHandshakeException : ProxyProtocolException`.

@@ -710,7 +710,7 @@ public class VmessClientTest
         string link = UriLink(MinimalJson(add: "cdn.example.com", port: "8443",
             extra: ",\"scy\":\"aes-128-gcm\",\"tls\":\"tls\""));
 
-        var client = ProxyClientFactory.Instance.Create(new Uri(link));
+        var client = Proxy.Create(new Uri(link));
 
         var vmess = Assert.IsType<VmessClient>(client);
         Assert.Equal(ProxyType.Vmess, vmess.Type);
@@ -724,7 +724,7 @@ public class VmessClientTest
     public void Factory_InvalidVmessUri_Throws()
     {
         var uri = new Uri(UriLink(MinimalJson(extra: ",\"aid\":\"1\"")));
-        Assert.Throws<FormatException>(() => ProxyClientFactory.Instance.Create(uri));
+        Assert.Throws<FormatException>(() => Proxy.Create(uri));
     }
 
     [Fact]

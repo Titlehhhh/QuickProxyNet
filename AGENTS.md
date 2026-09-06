@@ -34,14 +34,14 @@ hand-run diagnostic, and keeping it out of the solution keeps it out of CI.
 
 All public library types live in the `QuickProxyNet` namespace.
 
-- `Proxy` exposes static one-call `ConnectAsync(...)` helpers.
+- `Proxy` is the static entry point: one-call `ConnectAsync(...)` helpers, plus
+  `Create(...)` / `TryCreate(...)` building a client from a share-link `string`,
+  from a `Uri`, or from explicit proxy settings.
 - `ProxyUriExtensions` adds `Uri.ConnectThroughProxyAsync(...)`.
 - `IProxyClient` is the client contract; connection methods return
-  `ValueTask<Stream>`.
+  `ValueTask<Stream>`. `SourceLink` carries the text the client was built from.
 - `ProxyClient` owns common socket setup, timeout handling, and argument
   validation.
-- `ProxyClientFactory` creates clients from a share-link `string`, from a `Uri`,
-  or from explicit proxy settings.
 - `ProxyProtocolException` carries a structured `ProxyErrorCode`.
 - `VlessOptions` / `TrojanOptions` / `VmessOptions` plus the matching
   `*ShareLink.Parse` / `TryParse` describe a VPN-style endpoint.
@@ -146,7 +146,7 @@ independent:
   nothing leaves the machine.
 
 **Public shape, decided:** REALITY is reached through `VlessClient` — `security=reality`
-in `VlessOptions`, or simply the share link via `ProxyClientFactory.Create(string)`.
+in `VlessOptions`, or simply the share link via `Proxy.Create(string)`.
 Nothing under `Internal/Reality/` is public except `RealityHandshakeException`, which is a
 `ProxyProtocolException` so existing `catch` blocks see it. A separate `RealityClient` or a
 third package were considered and rejected: a user holds a `vless://` link, and the link
@@ -213,7 +213,7 @@ not "clean up" any of them without reading the reasoning first.
 
 8. **`vmess://` links generally cannot be `System.Uri` values.** The base64 JSON
    payload exceeds `Uri`'s host-length limit and contains `=` padding. Use
-   `ProxyClientFactory.Create(string)`, `VmessClient.FromShareLink(string)` or
+   `Proxy.Create(string)`, `VmessClient.FromShareLink(string)` or
    `VmessShareLink.Parse(string)` — all of which operate on the raw string.
 
 9. **Non-UUID user ids are real and must be derived, not rejected.** Xray's
@@ -297,7 +297,29 @@ not "clean up" any of them without reading the reasoning first.
     opaque launch error rather than as anything about transports. A share link
     combining the two describes something no server can serve; reject it by name.
 
-18. **Xray's own SOCKS inbound stalls above roughly one TLS record.** A request of
+18. **`ConnectAsync` throws exactly three kinds of exception, and that is a contract.**
+    `ProxyProtocolException` for everything that can go wrong on the wire,
+    `NotSupportedException` for a link describing something this library cannot speak,
+    and the `ArgumentException` family for a caller's own mistake. Callers written
+    against it catch the first and let the other two crash the process, which is right:
+    one is a dead node, the others are a bug in the calling code.
+
+    Two paths used to break it, and both were invisible from inside the library —
+    it took a checker running the public API over thousands of real nodes to see them.
+    `CreateSocket()` sat *outside* the guarded region in both overloads, so a bind
+    failure or handle exhaustion escaped as a raw `SocketException`. And
+    `AuthenticationException` derives from `SystemException`, not `IOException`, so it
+    slipped past the `ex is IOException or SocketException` guard — meaning an expired
+    certificate or an unservable SNI, the most common way a TLS-carried node dies, was
+    never reported as a proxy error at all. `TlsHandshake.AuthenticateAsync` now owns
+    every client-side handshake so there is one place for that translation.
+
+    The lesson generalises: a leak in an exception contract cannot be seen by the tests
+    that assert on the happy path, and cannot be seen by a caller that catches
+    `Exception`. It shows up only where something classifies failures and has a bucket
+    labelled "unrecognised" that starts filling up.
+
+19. **Xray's own SOCKS inbound stalls above roughly one TLS record.** A request of
     16 000 bytes round-trips; 16 500 hangs until the client gives up, with no error
     logged by either process. Not ours, and worth remembering before spending an
     afternoon on it again: `LargeRequestDiagnosticTests` isolates it by carrying

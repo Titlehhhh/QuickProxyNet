@@ -11,11 +11,11 @@ namespace QuickProxyNet.Tests;
 /// case below — those links are base64 JSON that <see cref="Uri"/> cannot represent at all — so
 /// that test is the one that matters most here.
 /// </remarks>
-public class ProxyClientFactoryTest
+public class ProxyFactoryTest
 {
     private const string Uuid = "11223344-5566-7788-99aa-bbccddeeff00";
 
-    private static IProxyClient Create(string link) => ProxyClientFactory.Instance.Create(link);
+    private static IProxyClient Create(string link) => Proxy.Create(link);
 
     [Fact]
     public void Create_Vless_ReturnsAVlessClient()
@@ -76,7 +76,7 @@ public class ProxyClientFactoryTest
     public void Create_ClassicSchemes_MatchTheUriOverload(string link, Type expected)
     {
         Assert.IsType(expected, Create(link));
-        Assert.IsType(expected, ProxyClientFactory.Instance.Create(new Uri(link)));
+        Assert.IsType(expected, Proxy.Create(new Uri(link)));
     }
 
     [Fact]
@@ -209,6 +209,107 @@ public class ProxyClientFactoryTest
 
         for (Exception? e = ex; e is not null; e = e.InnerException)
             Assert.DoesNotContain("SECRET", e.Message);
+    }
+
+    // --- TryCreate: walking a subscription without exception-driven control flow.
+
+    [Theory]
+    [InlineData("socks5://example.com:1080")]
+    [InlineData("http://user:pass@example.com:8080")]
+    [InlineData("vless://11223344-5566-7788-99aa-bbccddeeff00@example.com:443?type=tcp&security=tls")]
+    public void TryCreate_GoodLink_ReturnsTrueAndNoError(string link)
+    {
+        Assert.True(Proxy.TryCreate(link, out IProxyClient? client, out string? error));
+
+        Assert.NotNull(client);
+        Assert.Null(error);
+    }
+
+    [Theory]
+    [InlineData("")]                                        // empty
+    [InlineData("   ")]                                     // whitespace only
+    [InlineData("example.com:1080")]                        // no scheme
+    [InlineData("ss://not-a-scheme-we-speak@host:443")]     // unsupported scheme
+    [InlineData("vmess://this-is-not-base64-json")]         // known scheme, broken payload
+    [InlineData("vless://" + "a-31-character-id-aaaaaaaaaaaaa" + "@example.com:443")] // id length 31: too long to derive, too short to be hex
+    public void TryCreate_BadLink_ReturnsFalseWithAReason(string link)
+    {
+        Assert.False(Proxy.TryCreate(link, out IProxyClient? client, out string? error));
+
+        Assert.Null(client);
+        Assert.NotNull(error);
+        // The reason has to name the exception type: that is what separates "this link is junk"
+        // from "a parser threw something nobody planned for", which is a library bug.
+        Assert.Contains("Exception", error);
+    }
+
+    /// <summary>
+    /// The whole point of TryCreate: a list from the wild is other people's text, and one bad
+    /// line in a thousand must not end the run.
+    /// </summary>
+    [Fact]
+    public void TryCreate_NeverThrows_WhateverTheInput()
+    {
+        string[] hostile =
+        [
+            "://", "vless://", "vmess://", "trojan://", "socks5://",
+            "vless://@:", "vmess://" + new string('A', 5000), "http://[::",
+            "\0", "�", new string('/', 200), "vless://%%%@%%%:%%%",
+        ];
+
+        foreach (string link in hostile)
+        {
+            // Assert.False is not the claim here — some of these could conceivably parse one day.
+            // The claim is that the call returns rather than throwing.
+            Proxy.TryCreate(link, out _, out _);
+        }
+    }
+
+    // --- SourceLink: the text a client came from, which ProxyUri cannot reconstruct.
+
+    [Fact]
+    public void SourceLink_FromShareLink_KeepsTheWholeLink()
+    {
+        const string link =
+            "vless://11223344-5566-7788-99aa-bbccddeeff00@example.com:443?type=tcp&security=tls&sni=cdn.example.com#node";
+
+        IProxyClient client = Proxy.Create(link);
+
+        Assert.Equal(link, client.SourceLink);
+        // And the reason SourceLink has to exist: ProxyUri has dropped everything that makes the
+        // node reachable — the uuid, the sni, the transport.
+        Assert.Equal("vless://example.com:443/", client.ProxyUri.ToString());
+        Assert.DoesNotContain("cdn.example.com", client.ProxyUri.ToString());
+    }
+
+    [Fact]
+    public void SourceLink_FromUri_KeepsTheOriginalText()
+    {
+        const string link = "socks5://user:pass@example.com:1080";
+
+        IProxyClient client = Proxy.Create(new Uri(link));
+
+        Assert.Equal(link, client.SourceLink);
+    }
+
+    [Fact]
+    public void SourceLink_FromExplicitSettings_IsNull()
+    {
+        IProxyClient client = Proxy.Create(ProxyType.Socks5, "example.com", 1080, credentials: null);
+
+        Assert.Null(client.SourceLink);
+    }
+
+    [Theory]
+    [InlineData(ProxyType.Vless)]
+    [InlineData(ProxyType.Vmess)]
+    [InlineData(ProxyType.Trojan)]
+    public void Create_ShareLinkFamilyFromHostAndPort_IsRejected(ProxyType type)
+    {
+        // These carry a uuid, a security mode and a transport. Host and port cannot express them,
+        // and silently building a client that cannot connect would be worse than saying so.
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => Proxy.Create(type, "example.com", 443, credentials: null));
     }
 
     /// <summary>A port that was bound and immediately released — nothing is listening on it.</summary>

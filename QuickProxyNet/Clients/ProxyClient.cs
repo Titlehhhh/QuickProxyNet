@@ -73,6 +73,11 @@ public abstract class ProxyClient : IProxyClient
         host.Contains(':') && !host.StartsWith('[') ? $"[{host}]" : host;
 
     public Uri ProxyUri { get; private set; }
+
+    /// <inheritdoc />
+    /// <remarks>Set by the <see cref="Proxy"/> factory methods when a link was the input.</remarks>
+    public string? SourceLink { get; internal set; }
+
     public abstract ProxyType Type { get; }
 
     public NetworkCredential? ProxyCredentials { get; }
@@ -110,7 +115,20 @@ public abstract class ProxyClient : IProxyClient
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var socket = CreateSocket();
+        Socket socket;
+        try
+        {
+            socket = CreateSocket();
+        }
+        catch (SocketException ex)
+        {
+            // CreateSocket binds LocalEndPoint and allocates a handle, so it fails for reasons a
+            // caller must see as a connection failure like any other: an address already in use,
+            // or handle exhaustion under a few thousand concurrent checks. Left outside the guard
+            // this was the one path that escaped ConnectAsync as a raw SocketException.
+            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
+                $"Could not open a socket for proxy {ProxyHost}:{ProxyPort}.", ex);
+        }
 
         try
         {
@@ -152,7 +170,21 @@ public abstract class ProxyClient : IProxyClient
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var socket = CreateSocket();
+        Socket socket;
+        try
+        {
+            socket = CreateSocket();
+        }
+        catch (SocketException ex)
+        {
+            // CreateSocket binds LocalEndPoint and allocates a handle, so it fails for reasons a
+            // caller must see as a connection failure like any other: an address already in use,
+            // or handle exhaustion under a few thousand concurrent checks. Left outside the guard
+            // this was the one path that escaped ConnectAsync as a raw SocketException.
+            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
+                $"Could not open a socket for proxy {ProxyHost}:{ProxyPort}.", ex);
+        }
+
         var timedOut = new StrongBox<bool>(false);
 
         await using ITimer timer = TimeProvider.System.CreateTimer(

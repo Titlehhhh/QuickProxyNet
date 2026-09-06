@@ -10,11 +10,9 @@ public class FactoryTest
     {
         Uri uri = new Uri(stringUri);
 
-        ProxyClientFactory factory = new ProxyClientFactory();
-
         try
         {
-            factory.Create(uri);
+            Proxy.Create(uri);
         }
         catch (Exception e)
         {
@@ -32,10 +30,7 @@ public class FactoryTest
     {
         Uri uri = new Uri(stringUri);
 
-
-        ProxyClientFactory factory = new ProxyClientFactory();
-
-        IProxyClient client = factory.Create(uri);
+        IProxyClient client = Proxy.Create(uri);
 
 
         Assert.Equal(client.Type.ToString().ToLower(), uri.Scheme.ToLower());
@@ -54,10 +49,7 @@ public class FactoryTest
     {
         Uri uri = new Uri(stringUri);
 
-
-        ProxyClientFactory factory = new ProxyClientFactory();
-
-        IProxyClient client = factory.Create(uri);
+        IProxyClient client = Proxy.Create(uri);
 
 
         Assert.Equal(client.Type.ToString().ToLower(), uri.Scheme.ToLower());

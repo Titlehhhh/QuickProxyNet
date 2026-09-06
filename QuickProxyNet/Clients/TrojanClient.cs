@@ -70,7 +70,8 @@ public sealed class TrojanClient : ProxyClient
         Stream layered = new SslStream(stream, leaveInnerStreamOpen: false);
         try
         {
-            await ((SslStream)layered).AuthenticateAsClientAsync(BuildSslOptions(), cancellationToken)
+            await TlsHandshake.AuthenticateAsync(
+                (SslStream)layered, BuildSslOptions(), Options.Sni ?? Options.Host, cancellationToken)
                 .ConfigureAwait(false);
 
             layered = await ProxyTransport.ApplyAsync(

@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Sockets;
 
 namespace QuickProxyNet;
@@ -10,6 +10,18 @@ namespace QuickProxyNet;
 public interface IProxyClient
 {
     Uri ProxyUri { get; }
+
+    /// <summary>
+    /// The share link or URL this client was built from, or <see langword="null"/> when it was
+    /// built from explicit settings.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ProxyUri"/> cannot stand in for this. For VLESS, Trojan and VMess it is only
+    /// <c>scheme://host:port</c> — a node written out that way has lost its uuid, sni, flow and
+    /// transport, and cannot be connected to again. Code that checks a list of nodes and reports
+    /// the ones that worked needs the text that came in, not a normalised summary of it.
+    /// </remarks>
+    string? SourceLink => null;
     
     /// <summary>
     /// Gets the credentials used to authenticate with the proxy server, if required.

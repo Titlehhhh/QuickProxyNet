@@ -185,7 +185,7 @@ public class TrojanTest
     [Fact]
     public void Factory_CreatesTrojanClient()
     {
-        var client = ProxyClientFactory.Instance.Create(
+        var client = Proxy.Create(
             new Uri("trojan://pw@example.com:443?sni=a.com&allowInsecure=1"));
         var trojan = Assert.IsType<TrojanClient>(client);
         Assert.Equal(ProxyType.Trojan, trojan.Type);

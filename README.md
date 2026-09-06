@@ -33,7 +33,7 @@ dotnet add package QuickProxyNet
 
 ### One-liner from a share link (recommended)
 
-`Proxy.ConnectAsync` and `ProxyClientFactory.Instance.Create` accept the link as a **string** and dispatch on the scheme themselves. This matters for `vmess://` links: they are base64-encoded JSON, and `System.Uri` rejects most real-world ones (host length limit, base64 padding). You no longer have to inspect the scheme yourself to pick a parser.
+`Proxy.ConnectAsync` and `Proxy.Create` accept the link as a **string** and dispatch on the scheme themselves. This matters for `vmess://` links: they are base64-encoded JSON, and `System.Uri` rejects most real-world ones (host length limit, base64 padding). You no longer have to inspect the scheme yourself to pick a parser.
 
 ```csharp
 // Works for http/https/socks4/socks4a/socks5/vless/trojan/vmess links
@@ -61,7 +61,7 @@ await using var stream = await proxy.ConnectThroughProxyAsync("example.com", 443
 ### Factory API (when you need to configure the client)
 
 ```csharp
-var client = ProxyClientFactory.Instance.Create("socks5://proxy:1080");
+var client = Proxy.Create("socks5://proxy:1080");
 client.NoDelay = true;
 client.ReadTimeout = 5000;
 
@@ -72,7 +72,7 @@ await using var stream = await client.ConnectAsync("example.com", 443);
 
 ```csharp
 var creds = new NetworkCredential("user", "pass");
-var client = ProxyClientFactory.Instance.Create(
+var client = Proxy.Create(
     ProxyType.Socks5, "proxy.example.com", 1080, creds);
 
 await using var stream = await client.ConnectAsync("example.com", 80,
