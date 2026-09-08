@@ -123,9 +123,87 @@ public class ProxyFactoryTest
     public void Create_UnsupportedScheme_DoesNotEchoTheWholeLink()
     {
         var ex = Assert.Throws<NotSupportedException>(
-            () => Create("ss://verySecretPasswordThatMustNotLeak@example.com:8388"));
+            () => Create("hysteria2://verySecretPasswordThatMustNotLeak@example.com:443"));
 
         Assert.DoesNotContain("verySecretPasswordThatMustNotLeak", ex.Message);
+    }
+
+    // === Shadowsocks ===
+
+    [Fact]
+    public void Create_Shadowsocks_ReturnsAShadowsocksClient_AndKeepsTheLink()
+    {
+        // base64url("aes-256-gcm:password")
+        const string link = "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@example.com:8388#node";
+
+        var client = Assert.IsType<ShadowsocksClient>(Create(link));
+
+        Assert.Equal(ProxyType.Shadowsocks, client.Type);
+        Assert.Equal("example.com", client.Options.Host);
+        Assert.Equal(8388, client.Options.Port);
+        Assert.Equal("aes-256-gcm", client.Options.Method);
+        Assert.Equal("password", client.Options.Password);
+        Assert.Equal(link, client.SourceLink);
+        Assert.Equal("ss://example.com:8388/", client.ProxyUri.ToString());
+    }
+
+    [Fact]
+    public void Create_Shadowsocks_FromUri_MatchesTheStringOverload()
+    {
+        const string link = "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@example.com:8388/?plugin=#node";
+
+        var client = Assert.IsType<ShadowsocksClient>(Proxy.Create(new Uri(link)));
+
+        Assert.Equal(link, client.SourceLink);
+        Assert.Equal("password", client.Options.Password);
+    }
+
+    [Fact]
+    public void Create_Shadowsocks_LegacyGrammar()
+    {
+        // base64("aes-256-gcm:p@ss:w0rd@example.com:8388")
+        var client = Assert.IsType<ShadowsocksClient>(Create("ss://YWVzLTI1Ni1nY206cEBzczp3MHJkQGV4YW1wbGUuY29tOjgzODg=#legacy"));
+        Assert.Equal("p@ss:w0rd", client.Options.Password);
+    }
+
+    /// <summary>
+    /// AEAD-2022 wears the same scheme but is a different protocol. Walking a subscription must
+    /// see the cipher name in the reason, not a generic "unsupported".
+    /// </summary>
+    [Fact]
+    public void TryCreate_Shadowsocks2022_IsRejectedWithTheCipherName()
+    {
+        Assert.False(Proxy.TryCreate(
+            "ss://2022-blake3-aes-256-gcm:YctPZ6U7xPPcU%2Bgp3u%2B0tx%2FtRizJN9K8y%2BuKlW2qjlI%3D@192.168.100.1:8888#Example3",
+            out IProxyClient? client, out string? error));
+
+        Assert.Null(client);
+        Assert.NotNull(error);
+        Assert.StartsWith("NotSupportedException:", error);
+        Assert.Contains("2022-blake3-aes-256-gcm", error);
+        Assert.DoesNotContain("YctPZ6U7", error); // the PSK is a credential
+    }
+
+    [Fact]
+    public void TryCreate_ShadowsocksWithPlugin_IsRejectedWithThePluginName()
+    {
+        Assert.False(Proxy.TryCreate(
+            "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@example.com:8388/?plugin=v2ray-plugin%3Bmode%3Dwebsocket",
+            out _, out string? error));
+
+        Assert.Contains("NotSupportedException", error);
+        Assert.Contains("v2ray-plugin", error);
+    }
+
+    [Fact]
+    public async Task ProxyConnect_WithAShadowsocksLink_GetsPastParsingIntoTheNetwork()
+    {
+        var ex = await Assert.ThrowsAsync<ProxyProtocolException>(async () =>
+            await Proxy.ConnectAsync(
+                $"ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@127.0.0.1:{UnusedPort()}",
+                "example.com", 443, TimeSpan.FromSeconds(5)));
+
+        Assert.Equal(ProxyErrorCode.ConnectionFailed, ex.ErrorCode);
     }
 
     [Fact]
@@ -229,7 +307,9 @@ public class ProxyFactoryTest
     [InlineData("")]                                        // empty
     [InlineData("   ")]                                     // whitespace only
     [InlineData("example.com:1080")]                        // no scheme
-    [InlineData("ss://not-a-scheme-we-speak@host:443")]     // unsupported scheme
+    [InlineData("hysteria2://not-a-scheme-we-speak@host:443")] // unsupported scheme
+    [InlineData("ss://not!base64!@host:443")]                  // known scheme, broken userinfo
+    [InlineData("ss://rc4-md5:pw@host:8388")]                  // known scheme, cipher we refuse
     [InlineData("vmess://this-is-not-base64-json")]         // known scheme, broken payload
     [InlineData("vless://" + "a-31-character-id-aaaaaaaaaaaaa" + "@example.com:443")] // id length 31: too long to derive, too short to be hex
     public void TryCreate_BadLink_ReturnsFalseWithAReason(string link)
@@ -304,12 +384,27 @@ public class ProxyFactoryTest
     [InlineData(ProxyType.Vless)]
     [InlineData(ProxyType.Vmess)]
     [InlineData(ProxyType.Trojan)]
+    [InlineData(ProxyType.Shadowsocks)]
     public void Create_ShareLinkFamilyFromHostAndPort_IsRejected(ProxyType type)
     {
-        // These carry a uuid, a security mode and a transport. Host and port cannot express them,
-        // and silently building a client that cannot connect would be worse than saying so.
-        Assert.Throws<ArgumentOutOfRangeException>(
+        // These carry a uuid, a security mode, a cipher and a transport. Host and port cannot
+        // express them, and silently building a client that cannot connect would be worse than
+        // saying so. With credentials too: Shadowsocks looks like user/password, and is not.
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(
             () => Proxy.Create(type, "example.com", 443, credentials: null));
+        Assert.Contains("Shadowsocks", ex.Message);
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => Proxy.Create(type, "example.com", 443, new NetworkCredential("aes-256-gcm", "password")));
+    }
+
+    [Fact]
+    public void ProxyType_Shadowsocks_IsAppendedNotInserted()
+    {
+        // The enum has no explicit values: inserting a member renumbers everything after it, a
+        // silent breaking change for anything that persisted the number.
+        Assert.Equal(8, (int)ProxyType.Shadowsocks);
+        Assert.Equal(7, (int)ProxyType.Trojan);
     }
 
     /// <summary>A port that was bound and immediately released — nothing is listening on it.</summary>

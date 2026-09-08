@@ -9,5 +9,6 @@ public enum ProxyType
     Socks5,
     Vless,
     Vmess,
-    Trojan
+    Trojan,
+    Shadowsocks
 }

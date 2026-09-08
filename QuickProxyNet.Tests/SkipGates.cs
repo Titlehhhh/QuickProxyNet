@@ -1,3 +1,7 @@
+using System.Reflection;
+using System.Security.Cryptography;
+using Xunit.Sdk;
+
 namespace QuickProxyNet.Tests;
 
 /// <summary>
@@ -130,4 +134,32 @@ public sealed class DockerTheoryAttribute : TheoryAttribute
     /// <summary>Creates the attribute, deciding the skip state from the environment.</summary>
     public DockerTheoryAttribute() =>
         Skip = SkipGates.DockerEnabled ? null : $"{SkipGates.DockerSwitch} is not set to 1.";
+}
+
+/// <summary>
+/// An <c>[InlineData]</c> row that reports as <b>skipped</b> when the OS does not provide
+/// ChaCha20-Poly1305 (<see cref="ChaCha20Poly1305.IsSupported"/> — false on every Windows 10).
+/// </summary>
+/// <remarks>
+/// The theory's other rows still run. This exists so a cipher theory can cover
+/// <c>chacha20-ietf-poly1305</c> without an early <c>return</c> inside the test body, which
+/// would report "did not run" as passed. xunit v2 honours <see cref="DataAttribute.Skip"/> at
+/// discovery time, the same mechanism <see cref="DockerFactAttribute"/> relies on.
+/// </remarks>
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = true)]
+public sealed class ChaCha20InlineDataAttribute : DataAttribute
+{
+    private readonly object[] _data;
+
+    /// <param name="data">The row's arguments.</param>
+    public ChaCha20InlineDataAttribute(params object[] data)
+    {
+        _data = data;
+        Skip = ChaCha20Poly1305.IsSupported
+            ? null
+            : "ChaCha20-Poly1305 is not available on this OS (Windows needs build 20142 or later).";
+    }
+
+    /// <inheritdoc />
+    public override IEnumerable<object[]> GetData(MethodInfo testMethod) => [_data];
 }

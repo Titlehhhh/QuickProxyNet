@@ -21,7 +21,7 @@ public static class Proxy
 {
     /// <summary>
     /// Connects to a target host through a proxy described by a URL or share link of any
-    /// supported scheme, including <c>vless</c>, <c>trojan</c> and <c>vmess</c>.
+    /// supported scheme, including <c>vless</c>, <c>trojan</c>, <c>vmess</c> and <c>ss</c>.
     /// </summary>
     /// <param name="proxyLink">
     /// The proxy URL or share link. See <see cref="Create(string)"/> for the schemes this accepts.
@@ -34,7 +34,7 @@ public static class Proxy
     /// The <see cref="Uri"/> overloads below cover only the classic schemes, and deliberately so:
     /// they skip the client object entirely, which is what makes them suitable for checking
     /// proxies by the thousand. This one goes through <see cref="Create(string)"/> instead,
-    /// because VLESS, Trojan and VMess need the parsed configuration to negotiate at all. When
+    /// because VLESS, Trojan, VMess and Shadowsocks need the parsed configuration to negotiate at all. When
     /// you have a link and no reason to care which family it belongs to, use this.
     /// </remarks>
     public static async ValueTask<Stream> ConnectAsync(string proxyLink, string host, int port,
@@ -123,12 +123,15 @@ public static class Proxy
     /// </summary>
     /// <param name="proxyLink">
     /// <c>http</c>, <c>https</c>, <c>socks4</c>, <c>socks4a</c>, <c>socks5</c>, <c>vless</c>,
-    /// <c>trojan</c> or <c>vmess</c>. Credentials in the authority are honoured for the classic
-    /// schemes; the rest carry their configuration in the link itself.
+    /// <c>trojan</c>, <c>vmess</c> or <c>ss</c>. Credentials in the authority are honoured for the
+    /// classic schemes; the rest carry their configuration in the link itself.
     /// </param>
     /// <returns>A client ready to <see cref="IProxyClient.ConnectAsync(string, int, CancellationToken)"/>.</returns>
     /// <exception cref="ArgumentException"><paramref name="proxyLink"/> is empty or has no scheme.</exception>
-    /// <exception cref="NotSupportedException">The scheme is not one this library speaks.</exception>
+    /// <exception cref="NotSupportedException">
+    /// The scheme is not one this library speaks, or the link names a Shadowsocks cipher or plugin
+    /// this library does not speak (the message names it).
+    /// </exception>
     /// <exception cref="FormatException">The scheme is known but the link is malformed.</exception>
     /// <remarks>
     /// <para>
@@ -167,6 +170,9 @@ public static class Proxy
         if (scheme.Equals("vmess", StringComparison.OrdinalIgnoreCase))
             return Tag(new VmessClient(VmessShareLink.Parse(trimmed)), trimmed);
 
+        if (scheme.Equals("ss", StringComparison.OrdinalIgnoreCase))
+            return Tag(new ShadowsocksClient(ShadowsocksShareLink.Parse(trimmed)), trimmed);
+
         // The classic ones are host/port URIs, so they go through Uri for its authority parsing.
         if (scheme.Equals("http", StringComparison.OrdinalIgnoreCase) ||
             scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ||
@@ -183,7 +189,7 @@ public static class Proxy
 
         throw new NotSupportedException(
             $"Proxy scheme '{scheme}' is not supported. This library speaks http, https, socks4, " +
-            "socks4a, socks5, vless, trojan and vmess.");
+            "socks4a, socks5, vless, trojan, vmess and ss (Shadowsocks).");
     }
 
     /// <summary>
@@ -238,20 +244,27 @@ public static class Proxy
     /// </summary>
     /// <param name="proxyUri">The proxy URI, including scheme, host, port and optional credentials.</param>
     /// <returns>A client configured for the proxy the URI describes.</returns>
-    /// <exception cref="NotSupportedException">The URI scheme is not one this library speaks.</exception>
+    /// <exception cref="NotSupportedException">
+    /// The URI scheme is not one this library speaks, or the link names a Shadowsocks cipher or
+    /// plugin this library does not speak (the message names it).
+    /// </exception>
     /// <remarks>
     /// <b>Note for <c>vmess://</c>:</b> a VMess share link is base64-encoded JSON rather than a
     /// host/port URI, and <see cref="Uri"/> rejects a payload longer than its host-length limit or
     /// containing base64 padding — which covers most real-world links. Such a link cannot be turned
     /// into a <see cref="Uri"/> at all, so prefer <see cref="Create(string)"/>. The special case
-    /// below exists for the short links that <em>are</em> representable.
+    /// below exists for the short links that <em>are</em> representable. The same applies to
+    /// legacy <c>ss://</c> links, whose whole authority is one base64 blob that
+    /// <see cref="Uri"/> refuses as a host name: use <see cref="Create(string)"/> or
+    /// <see cref="ShadowsocksClient.FromShareLink"/>.
     /// </remarks>
     public static IProxyClient Create(Uri proxyUri)
     {
         ArgumentNullException.ThrowIfNull(proxyUri);
 
-        // VLESS, Trojan and VMess carry their whole configuration (uuid, security, sni, ...) in
-        // the URI, so they are parsed as share links rather than as host/port/credential triples.
+        // VLESS, Trojan, VMess and Shadowsocks carry their whole configuration (uuid, security,
+        // cipher, ...) in the URI, so they are parsed as share links rather than as
+        // host/port/credential triples.
         if (proxyUri.Scheme.Equals("vless", StringComparison.OrdinalIgnoreCase))
             return Tag(new VlessClient(VlessShareLink.Parse(proxyUri.OriginalString)), proxyUri.OriginalString);
 
@@ -260,6 +273,9 @@ public static class Proxy
 
         if (proxyUri.Scheme.Equals("vmess", StringComparison.OrdinalIgnoreCase))
             return Tag(new VmessClient(VmessShareLink.Parse(proxyUri.OriginalString)), proxyUri.OriginalString);
+
+        if (proxyUri.Scheme.Equals("ss", StringComparison.OrdinalIgnoreCase))
+            return Tag(new ShadowsocksClient(ShadowsocksShareLink.Parse(proxyUri.OriginalString)), proxyUri.OriginalString);
 
         ProxyType type = proxyUri.Scheme switch
         {
@@ -270,7 +286,7 @@ public static class Proxy
             "socks5" => ProxyType.Socks5,
             _ => throw new NotSupportedException(
                 $"Proxy scheme '{proxyUri.Scheme}' is not supported. This library speaks http, https, socks4, " +
-                "socks4a, socks5, vless, trojan and vmess.")
+                "socks4a, socks5, vless, trojan, vmess and ss (Shadowsocks).")
         };
 
         return Tag(Create(type, proxyUri.Host, proxyUri.Port, ParseCredentials(proxyUri)), proxyUri.OriginalString);
@@ -317,7 +333,7 @@ public static class Proxy
         };
 
     private const string ShareLinkFamilyMessage =
-        "VLESS, Trojan and VMess carry a configuration that host and port cannot express; " +
+        "VLESS, Trojan, VMess and Shadowsocks carry a configuration that host and port cannot express; " +
         "build them from a share link instead.";
 
     // Records the text a client was built from, so a caller holding only IProxyClient can report

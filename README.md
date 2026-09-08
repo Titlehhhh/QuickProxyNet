@@ -14,10 +14,10 @@
 - **Zero runtime dependencies** — BCL only, no third-party packages
 - **Zero-alloc protocol logic** — `ArrayPool`, `stackalloc`, `Utf8Formatter`, `ValueTask` throughout
 - **5 classic proxy protocols** — HTTP, HTTPS, SOCKS4, SOCKS4a, SOCKS5
-- **3 VPN-style protocols** — VLESS, VMess (VMessAEAD), Trojan, over `tcp`, `ws` or `httpupgrade`
+- **4 VPN-style protocols** — VLESS, VMess (VMessAEAD), Trojan, over `tcp`, `ws` or `httpupgrade`; Shadowsocks AEAD over `tcp`
 - **VLESS REALITY in-process** — no external binary: a managed TLS 1.3 client (ClientHello, X25519, key schedule, record layer) lives in the core package, and `VlessClient` uses it automatically when `security=reality`
 - **XTLS `xtls-rprx-vision`** — the flow used by ~95% of real-world REALITY nodes
-- **Share-link parsing** — pass a `vless://`, `vmess://`, `trojan://`, `socks5://`, `http://`, … string directly; no `Uri` gymnastics
+- **Share-link parsing** — pass a `vless://`, `vmess://`, `trojan://`, `ss://`, `socks5://`, `http://`, … string directly; no `Uri` gymnastics
 - **Static one-liner API** — `Proxy.ConnectAsync(link, host, port)` for mass checkers
 - **Structured error codes** — `ProxyProtocolException` with `ProxyErrorCode` enum for programmatic error handling
 - **Timeout support** — per-connection timeouts with `ProxyErrorCode.Timeout`
@@ -36,7 +36,7 @@ dotnet add package QuickProxyNet
 `Proxy.ConnectAsync` and `Proxy.Create` accept the link as a **string** and dispatch on the scheme themselves. This matters for `vmess://` links: they are base64-encoded JSON, and `System.Uri` rejects most real-world ones (host length limit, base64 padding). You no longer have to inspect the scheme yourself to pick a parser.
 
 ```csharp
-// Works for http/https/socks4/socks4a/socks5/vless/trojan/vmess links
+// Works for http/https/socks4/socks4a/socks5/vless/trojan/vmess/ss links
 await using var stream = await Proxy.ConnectAsync(
     "socks5://user:pass@127.0.0.1:1080",
     "example.com", 443,
@@ -98,8 +98,21 @@ Also not implemented: Vision's TLS-in-TLS splice. It is a throughput optimizatio
 | VLESS | Supported | `security=none`, `tls`, `reality`; flow `xtls-rprx-vision` |
 | Trojan | Supported | over TLS |
 | VMess | Supported | VMessAEAD, `alterId=0`, optional TLS |
+| Shadowsocks | Supported | AEAD (SIP004/SIP007) over `tcp`: `aes-128-gcm`, `aes-192-gcm`, `aes-256-gcm`, `chacha20-ietf-poly1305` |
 | Hysteria2 / TUIC | **Not supported** | QUIC-based; the library has no datagram model |
-| Shadowsocks | **Not supported** | — |
+
+### Shadowsocks
+
+`ss://` links in both grammars are accepted — the legacy `ss://base64(method:password@host:port)#tag`
+and SIP002 `ss://userinfo@host:port/?plugin=…#tag` with base64 or plain `method:password` userinfo.
+The four AEAD ciphers above are spoken over raw TCP. Everything else is refused **by name** with a
+`NotSupportedException` before a byte is written, never silently downgraded: the AEAD-2022
+`2022-blake3-*` family (SIP022, needs BLAKE3), every legacy stream cipher (`rc4-md5`, `aes-*-cfb`,
+`chacha20-ietf`, …), `none`/`plain`, `xchacha20-ietf-poly1305` (no XChaCha20 in the .NET BCL),
+and any `plugin=` (SIP003 plugins are separate processes). No UDP, no `ws`/TLS transport for
+Shadowsocks, no SIP008 JSON subscriptions. `chacha20-ietf-poly1305` needs an OS with
+ChaCha20-Poly1305 — Windows 11 / Server 2022, not Windows 10. A wrong password is not reported as
+one: the server sends nothing, so it looks exactly like a dead target (see `ShadowsocksClient`).
 
 ### Transports
 
@@ -216,6 +229,7 @@ messages never contain the credential: a malformed user id is reported by length
 | `Vless` | VLESS (incl. REALITY, `xtls-rprx-vision`) | UUID | Yes |
 | `Vmess` | VMess (VMessAEAD) | UUID | Yes |
 | `Trojan` | Trojan | Password | Yes |
+| `Shadowsocks` | Shadowsocks AEAD | Password + cipher | Yes |
 
 ## Configuration Options
 

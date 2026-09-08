@@ -1,4 +1,4 @@
-# Integration-test servers for QuickProxyNet's VLESS / Trojan / VMess clients.
+# Integration-test servers for QuickProxyNet's VLESS / Trojan / VMess / Shadowsocks clients.
 #
 # ALWAYS drive this file with the fixed project name so nothing is orphaned:
 #
@@ -46,6 +46,9 @@ services:
       - "24808:10008"   # vmess over ws, path /qpn-vmess-ws
       - "24809:10009"   # trojan over ws + tls, path /qpn-trojan-ws
       - "24810:10010"   # vless over httpupgrade, path /qpn-hu
+      - "24821:10011"   # shadowsocks, aes-256-gcm
+      - "24822:10012"   # shadowsocks, chacha20-ietf-poly1305
+      - "24823:10013"   # shadowsocks, aes-128-gcm
     depends_on:
       echo:
         condition: service_healthy
@@ -69,6 +72,10 @@ services:
       - "24818:10008"   # vmess over ws, path /qpn-vmess-ws
       - "24819:10009"   # trojan over ws + tls, path /qpn-trojan-ws
       - "24820:10010"   # vless over httpupgrade, path /qpn-hu
+      - "24831:10011"   # shadowsocks, aes-256-gcm
+      - "24832:10012"   # shadowsocks, chacha20-ietf-poly1305
+      - "24833:10013"   # shadowsocks, aes-128-gcm
+      - "24834:10014"   # shadowsocks, aes-192-gcm (sing-box only: Xray has no such cipher)
     depends_on:
       echo:
         condition: service_healthy
