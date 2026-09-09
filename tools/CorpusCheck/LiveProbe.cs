@@ -51,7 +51,7 @@ internal readonly record struct LiveResult(bool Ok, string Detail, TimeSpan Elap
 internal static class LiveSampler
 {
     /// <summary>Protocols sampled, in round-robin order.</summary>
-    private static readonly string[] Order = ["vless", "trojan", "vmess"];
+    private static readonly string[] Order = ["vless", "trojan", "vmess", "ss"];
 
     public static LiveSample Build(string corpusPath, int count, int seed)
     {
@@ -59,7 +59,8 @@ internal static class LiveSampler
         {
             ["vless"] = new(),
             ["trojan"] = new(),
-            ["vmess"] = new()
+            ["vmess"] = new(),
+            ["ss"] = new()
         };
 
         // One server, one probe: several share links often point at the same endpoint.
@@ -77,6 +78,8 @@ internal static class LiveSampler
                 ConsiderTrojan(pools["trojan"], line, seenEndpoints);
             else if (line.StartsWith("vmess://", StringComparison.OrdinalIgnoreCase))
                 ConsiderVmess(pools["vmess"], line, seenEndpoints);
+            else if (line.StartsWith("ss://", StringComparison.OrdinalIgnoreCase))
+                ConsiderShadowsocks(pools["ss"], line, seenEndpoints);
         }
 
         var rng = new Random(seed);
@@ -153,6 +156,54 @@ internal static class LiveSampler
             options.Port,
             [options.Host, options.Sni, options.Id, options.Remark],
             () => new VlessClient(options)));
+    }
+
+    private static void ConsiderShadowsocks(Pool pool, string line, HashSet<string> seen)
+    {
+        pool.Seen++;
+
+        if (IsHtmlEscaped(pool, line))
+            return;
+
+        if (!ShadowsocksShareLink.TryParse(line, out var options))
+        {
+            pool.Exclude("does not parse");
+            return;
+        }
+
+        if (options.Plugin is { Length: > 0 } plugin)
+        {
+            pool.Exclude($"plugin={plugin.Split(';', 2)[0].ToLowerInvariant()} (not implemented)");
+            return;
+        }
+
+        ShadowsocksClient client;
+        try
+        {
+            client = new ShadowsocksClient(options);
+        }
+        catch (NotSupportedException ex)
+        {
+            pool.Exclude(Redactor.NormalizeReason(ex.Message));
+            return;
+        }
+        catch (ArgumentException)
+        {
+            pool.Exclude("unusable method/password");
+            return;
+        }
+
+        if (!IsDialable(pool, options.Host, options.Port, seen))
+            return;
+
+        pool.Eligible.Add(new LiveNode(
+            "ss",
+            $"method={options.Method.ToLowerInvariant()}",
+            Redactor.RedactSsLink(line),
+            options.Host,
+            options.Port,
+            [options.Host, options.Password, options.Remark],
+            () => client));
     }
 
     private static void ConsiderTrojan(Pool pool, string line, HashSet<string> seen)
@@ -488,8 +539,9 @@ internal sealed class LiveRun
     private readonly ProtocolStats _vless = new("vless", "successful nodes by mode", null);
     private readonly ProtocolStats _trojan = new("trojan", "successful nodes by mode", null);
     private readonly ProtocolStats _vmess = new("vmess", "successful nodes by mode", null);
+    private readonly ProtocolStats _shadowsocks = new("ss", "successful nodes by mode", null);
 
-    private ProtocolStats[] All => [_vless, _trojan, _vmess];
+    private ProtocolStats[] All => [_vless, _trojan, _vmess, _shadowsocks];
 
     public void Record(LiveNode node, LiveResult result)
     {
@@ -497,6 +549,7 @@ internal sealed class LiveRun
         {
             "vless" => _vless,
             "trojan" => _trojan,
+            "ss" => _shadowsocks,
             _ => _vmess
         };
 

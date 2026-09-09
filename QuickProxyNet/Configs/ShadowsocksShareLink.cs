@@ -293,11 +293,38 @@ public static class ShadowsocksShareLink
                 return false;
             }
 
+            if (!LooksLikeCipherName(plain.Slice(0, colon)))
+            {
+                error = "Shadowsocks share link userinfo is not base64 of 'method:password': " +
+                        "the decoded bytes do not start with a cipher name.";
+                return false;
+            }
+
             method = plain.Slice(0, colon).ToString();
             password = plain.Slice(colon + 1).ToString();
             error = null;
             return true;
         }
+    }
+
+    // Guards the base64 branch only. Userinfo that is a bare password made of base64 characters
+    // decodes to bytes that can hold a ':' by chance, and everything before it would then be read
+    // as a cipher name. A real name is short ASCII: letters, digits, '-', '_', '.' and '+'
+    // (aes-256-gcm, chacha20-ietf-poly1305, 2022-blake3-aes-256-gcm, AEAD_AES_256_GCM). Text the
+    // producer wrote itself is left alone: an unknown but well-formed name still parses, so a
+    // caller can inspect it, and the client names it when it refuses to connect.
+    private static bool LooksLikeCipherName(ReadOnlySpan<char> value)
+    {
+        if (value.IsEmpty || value.Length > 40)
+            return false;
+
+        foreach (char c in value)
+        {
+            if (!char.IsAsciiLetterOrDigit(c) && c is not ('-' or '_' or '.' or '+'))
+                return false;
+        }
+
+        return true;
     }
 
     // host[:port], with a bracketed IPv6 literal allowed. Port defaults to 8388.

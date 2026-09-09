@@ -507,4 +507,32 @@ public class ShadowsocksShareLinkTest
         Assert.Equal(ProxyErrorCode.StringTooLong, ex.ErrorCode);
         Assert.Empty(transport.WrittenBytes);
     }
+
+    [Theory]
+    [InlineData("2bc31b80+786m+k9EXdvb28", "base64 whose bytes are binary noise holding a colon")]
+    [InlineData("5fa74a60-cc6c2VjcmV0nu8", "the same, url-safe alphabet")]
+    public void TryParse_RejectsBase64UserInfoThatDecodesToBinary(string userInfo, string _)
+    {
+        Assert.False(ShadowsocksShareLink.TryParse($"ss://{userInfo}@example.com:8388", out ShadowsocksOptions? rejected));
+        Assert.Null(rejected);
+
+        var ex = Assert.Throws<FormatException>(
+            () => ShadowsocksShareLink.Parse($"ss://{userInfo}@example.com:8388"));
+        Assert.Contains("not base64 of 'method:password'", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("aes-256-gcm")]
+    [InlineData("2022-blake3-aes-256-gcm")]
+    [InlineData("AEAD_CHACHA20_POLY1305")]
+    [InlineData("some-cipher-we-never-heard-of")]
+    public void TryParse_KeepsAcceptingWellFormedNamesFromBase64UserInfo(string method)
+    {
+        string userInfo = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{method}:secret"))
+            .TrimEnd('=');
+
+        Assert.True(ShadowsocksShareLink.TryParse($"ss://{userInfo}@example.com:8388", out var options));
+        Assert.Equal(method, options.Method);
+        Assert.Equal("secret", options.Password);
+    }
 }

@@ -267,6 +267,7 @@ internal sealed class CorpusRun
     private readonly ProtocolStats _vless = new("vless", breakdownNote: ParseNote);
     private readonly ProtocolStats _trojan = new("trojan", breakdownNote: ParseNote);
     private readonly ProtocolStats _vmess = new("vmess", breakdownNote: ParseNote);
+    private readonly ProtocolStats _shadowsocks = new("ss", breakdownNote: ParseNote);
 
     /// <summary>Schemes this library does not implement — reported, but not failures.</summary>
     private readonly SortedDictionary<string, int> _otherSchemes = new(StringComparer.OrdinalIgnoreCase);
@@ -309,6 +310,13 @@ internal sealed class CorpusRun
             else
                 _vmess.RecordFailure(CaptureReason(() => VmessShareLink.Parse(line)), line, Redactor.RedactVmessLink);
         }
+        else if (line.StartsWith("ss://", StringComparison.OrdinalIgnoreCase))
+        {
+            if (ShadowsocksShareLink.TryParse(line, out var options))
+                _shadowsocks.RecordOk(ShadowsocksMode(options));
+            else
+                _shadowsocks.RecordFailure(CaptureReason(() => ShadowsocksShareLink.Parse(line)), line, Redactor.RedactSsLink);
+        }
         else
         {
             int schemeEnd = line.IndexOf("://", StringComparison.Ordinal);
@@ -322,6 +330,15 @@ internal sealed class CorpusRun
                 _noScheme++;
             }
         }
+    }
+
+    private static string ShadowsocksMode(ShadowsocksOptions options)
+    {
+        string method = options.Method.ToLowerInvariant();
+        string plugin = options.Plugin is { Length: > 0 } value
+            ? value.Split(';', 2)[0].ToLowerInvariant()
+            : "none";
+        return $"method={method}, plugin={plugin}";
     }
 
     private static string VlessMode(VlessOptions options)
@@ -368,7 +385,7 @@ internal sealed class CorpusRun
         sb.AppendLine();
         sb.AppendLine("| Protocol | Total | Parsed OK | Failed | OK % |");
         sb.AppendLine("| --- | ---: | ---: | ---: | ---: |");
-        foreach (var stats in new[] { _vless, _trojan, _vmess })
+        foreach (var stats in new[] { _vless, _trojan, _vmess, _shadowsocks })
         {
             sb.AppendLine(
                 $"| {stats.Name} | {stats.Total} | {stats.Ok} | {stats.Failed} | " +
@@ -387,10 +404,10 @@ internal sealed class CorpusRun
             sb.AppendLine();
         }
 
-        foreach (var stats in new[] { _vless, _trojan, _vmess })
+        foreach (var stats in new[] { _vless, _trojan, _vmess, _shadowsocks })
             stats.AppendBreakdown(sb);
 
-        foreach (var stats in new[] { _vless, _trojan, _vmess })
+        foreach (var stats in new[] { _vless, _trojan, _vmess, _shadowsocks })
             stats.AppendFailures(sb);
 
         return sb.ToString();
@@ -609,6 +626,30 @@ internal static class Redactor
             sb.Append('?').Append(RedactQuery(query));
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Redacts an <c>ss://</c> link. The legacy grammar hides method, password, host and port
+    /// inside one base64 blob, so nothing in it may be echoed; the SIP002 grammar redacts like
+    /// any other userinfo link.
+    /// </summary>
+    public static string RedactSsLink(string link)
+    {
+        int schemeEnd = link.IndexOf("://", StringComparison.Ordinal);
+        if (schemeEnd < 0)
+            return "<unparseable line>";
+
+        string rest = link[(schemeEnd + 3)..];
+        int hash = rest.IndexOf('#');
+        if (hash >= 0)
+            rest = rest[..hash];
+
+        int q = rest.IndexOf('?');
+        string authority = q >= 0 ? rest[..q] : rest;
+
+        return authority.Contains('@', StringComparison.Ordinal)
+            ? RedactUriLink(link)
+            : "ss://<legacy-base64-blob>";
     }
 
     private static string RedactQuery(string query)
