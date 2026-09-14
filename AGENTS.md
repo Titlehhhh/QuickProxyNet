@@ -152,9 +152,22 @@ independent:
   transcribed from `XTLS/REALITY`'s `tls.go`.
 - `HostilePeerTest` — a scripted malformed or hostile peer, in memory. This is the
   only suite that can reach the failure modes a cooperating server never produces.
+  Its `KeyedServer` derives real keys and a certificate bound to the REALITY auth key,
+  which is what reaches the checks after the ServerHello. Its unbent flight is a test
+  of its own, so a refusal there cannot be a mistake in the peer.
 - `Integration/Managed*` — real handshakes and real tunnels against Xray-core, with
   a REALITY server whose `dest` points at a decoy TLS inbound in the same process, so
   nothing leaves the machine.
+
+**Strict where Go's client is strict.** The server side is Go's crypto/tls, so leniency
+Go's client does not have buys nothing. Application data before the server's Finished is
+refused, not buffered for the stream (RFC 8446 §2; Go's `readRecordOrCCS` sends
+`unexpected_message` while the handshake is incomplete, even for an empty record). Handshake
+bytes still buffered when the read keys change — after the ServerHello and after the
+Finished — are refused (RFC 8446 §5.1; Go's `setReadTrafficSecret`). A server's first
+application data comes under its application keys, possibly in the same transport read as
+its flight. That is safe because the record layer decrypts a record only when it is asked
+for one, by which point the application keys are in place.
 
 **Public shape, decided:** REALITY is reached through `VlessClient` — `security=reality`
 in `VlessOptions`, or simply the share link via `Proxy.Create(string)`.

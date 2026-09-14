@@ -248,6 +248,19 @@ internal sealed class RealityTlsClient
                 // ---- The REALITY decision ----
                 AssertRealityServer(leafCertificate, authKey, options.ServerName);
 
+                // The Finished is the last message under the server's handshake keys; reads switch
+                // to its application keys below. RFC 8446 §5.1: a handshake message must not span
+                // that change, and one that does ends the connection — the same rule as after the
+                // ServerHello. Without the check, whatever followed the Finished in its record would
+                // be dropped without a word. Go's client makes it at the same point, once the
+                // certificate and the Finished are verified and before its own Finished is sent
+                // (setReadTrafficSecret, from readServerFinished).
+                if (messages.HasBufferedBytes)
+                    throw new RealityHandshakeException(
+                        "The server sent more handshake data in the record that carried its Finished. A " +
+                        "handshake message must not span the change to application keys, so the connection " +
+                        "is refused.");
+
                 byte[] transcriptAfterServerFinished = transcript.GetCurrentHash();
 
                 // ---- Client Finished ----
@@ -276,7 +289,7 @@ internal sealed class RealityTlsClient
                 records.Write = new TlsRecordProtection(parsed.Suite, secrets.ClientApplicationTraffic);
                 records.Read = new TlsRecordProtection(parsed.Suite, secrets.ServerApplicationTraffic);
 
-                return new RealityTlsStream(transport, records, messages.Leftover);
+                return new RealityTlsStream(transport, records);
             }
             finally
             {
@@ -308,7 +321,6 @@ internal sealed class RealityTlsClient
             if (hello.PrivateKey is not null)
                 CryptographicOperations.ZeroMemory(hello.PrivateKey);
 
-            // Safe here: the stream returned above has already copied whatever Leftover held.
             messages?.Return();
         }
     }
@@ -573,16 +585,13 @@ internal sealed class RealityTlsClient
     /// <remarks>
     /// A handshake message may span records and several may share one, so the record boundary
     /// carries no meaning here. Anything that is not a handshake record is either dropped
-    /// (ChangeCipherSpec) or fatal (Alert); application data arriving mid-handshake is kept for
-    /// the stream, since the server may coalesce it with its last flight.
+    /// (ChangeCipherSpec) or fatal: an Alert, or application data, which TLS 1.3 allows
+    /// only once the server's Finished has brought in the keys that carry it.
     /// </remarks>
     private sealed class HandshakeReader(TlsRecordStream records)
     {
         /// <summary>Largest handshake message we will reassemble, well past any real one.</summary>
         private const int MaxHandshakeMessage = 1 << 18;
-
-        /// <summary>Cap on early application data, so a flood cannot exhaust memory.</summary>
-        private const int MaxLeftover = 1 << 16;
 
         /// <summary>
         /// Cap on ChangeCipherSpec records, which carry no meaning and are dropped.
@@ -593,28 +602,18 @@ internal sealed class RealityTlsClient
         /// </remarks>
         private const int MaxChangeCipherSpec = 8;
 
-        /// <summary>
-        /// Cap on empty application-data records during the handshake. Each is legal on its own
-        /// and carries nothing; a stream of them is a peer keeping us busy.
-        /// </summary>
-        private const int MaxEmptyRecords = 64;
-
         private byte[] _buffer = ArrayPool<byte>.Shared.Rent(TlsRecordStream.MaxCiphertext);
         private int _length;
         private int _consumed;
         private int _changeCipherSpecSeen;
-        private int _emptyRecordsSeen;
-
-        /// <summary>Application data that arrived before the handshake finished.</summary>
-        public List<byte> Leftover { get; } = [];
-
-        /// <summary>Whether any handshake bytes are still buffered but unconsumed.</summary>
-        public bool HasBufferedBytes => _length - _consumed > 0;
 
         /// <summary>
-        /// Returns the reassembly buffer to the pool. <see cref="Leftover"/> is a separate list
-        /// and stays valid afterwards.
+        /// Whether any handshake bytes are still buffered but unconsumed. Checked at each change
+        /// of read keys, because a handshake message must not span one.
         /// </summary>
+        public bool HasBufferedBytes => _length - _consumed > 0;
+
+        /// <summary>Returns the reassembly buffer to the pool.</summary>
         public void Return()
         {
             if (_buffer.Length == 0)
@@ -660,18 +659,16 @@ internal sealed class RealityTlsClient
                             "than passed to the caller.");
 
                     case TlsContentType.ApplicationData:
-                        if (record.Payload.IsEmpty && ++_emptyRecordsSeen > MaxEmptyRecords)
-                            throw new RealityHandshakeException(
-                                $"The peer sent more than {MaxEmptyRecords} empty application-data records " +
-                                "during the handshake.");
-
-                        if (Leftover.Count + record.Payload.Length > MaxLeftover)
-                            throw new RealityHandshakeException(
-                                $"The peer sent more than {MaxLeftover} bytes of application data before " +
-                                "finishing its handshake.");
-
-                        Leftover.AddRange(record.Payload.ToArray());
-                        continue;
+                        // Protected by the server's handshake keys, so it did come from the peer
+                        // we are negotiating with, but TLS 1.3 has no place for it yet: application
+                        // data follows the sender's Finished, under the keys that Finished
+                        // introduces (RFC 8446 §2). Go's client answers any application_data before
+                        // its handshake is complete with unexpected_message, empty records included,
+                        // and a REALITY server, being Go's crypto/tls underneath, does not send one.
+                        // Refusing it outright also leaves nothing to buffer and nothing to bound.
+                        throw new RealityHandshakeException(
+                            "The server sent application data before its Finished. TLS 1.3 carries application " +
+                            "data only under the keys that the Finished introduces, so it is refused.");
 
                     case TlsContentType.Handshake:
                         // RFC 8446 §5.1: zero-length handshake records are forbidden. Accepting

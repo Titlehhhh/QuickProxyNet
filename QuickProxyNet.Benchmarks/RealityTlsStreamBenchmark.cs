@@ -76,7 +76,7 @@ public class RealityTlsStreamBenchmark
         {
             Write = new TlsRecordProtection(suite, sinkSecret)
         };
-        _sink = new RealityTlsStream(Stream.Null, sinkRecords, []);
+        _sink = new RealityTlsStream(Stream.Null, sinkRecords);
 
         // Room for 1 MiB of plaintext plus per-record headers and tags, so the stream never grows
         // during a measured operation.
@@ -91,8 +91,8 @@ public class RealityTlsStreamBenchmark
             Read = new TlsRecordProtection(suite, pairSecret)
         };
 
-        _writer = new RealityTlsStream(_wire, writerRecords, []);
-        _reader = new RealityTlsStream(_wire, readerRecords, []);
+        _writer = new RealityTlsStream(_wire, writerRecords);
+        _reader = new RealityTlsStream(_wire, readerRecords);
     }
 
     [GlobalCleanup]

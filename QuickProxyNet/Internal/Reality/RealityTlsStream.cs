@@ -41,14 +41,14 @@ internal sealed class RealityTlsStream : Stream
 
     private int _recordsWithoutData;
 
-    internal RealityTlsStream(Stream transport, TlsRecordStream records, List<byte> leftover)
+    /// <remarks>
+    /// Starts with nothing pending. The handshake refuses application data that arrives before
+    /// the server's Finished, as Go's client does, so there is never any to carry over.
+    /// </remarks>
+    internal RealityTlsStream(Stream transport, TlsRecordStream records)
     {
         _transport = transport;
         _records = records;
-
-        // The one case that must be copied: the leftover comes from the handshake reader's list,
-        // which does not survive.
-        _pending = leftover.Count > 0 ? leftover.ToArray() : ReadOnlyMemory<byte>.Empty;
     }
 
     public override bool CanRead => !_disposed;

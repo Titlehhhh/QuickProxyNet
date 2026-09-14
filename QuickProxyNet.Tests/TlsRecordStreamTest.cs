@@ -386,7 +386,7 @@ public class TlsRecordStreamTest
 
         var transport = new MemoryStream(wire.ToArray());
         var records = new TlsRecordStream(transport) { Read = new TlsRecordProtection(suite, secret) };
-        await using var tls = new RealityTlsStream(transport, records, []);
+        await using var tls = new RealityTlsStream(transport, records);
 
         var ex = await Assert.ThrowsAsync<RealityHandshakeException>(async () =>
             await tls.ReadAsync(new byte[64]));
@@ -405,7 +405,7 @@ public class TlsRecordStreamTest
 
         var wire = new MemoryStream();
         var writerRecords = new TlsRecordStream(wire) { Write = new TlsRecordProtection(suite, secret) };
-        using (var writer = new RealityTlsStream(wire, writerRecords, []))
+        using (var writer = new RealityTlsStream(wire, writerRecords))
         {
             writer.Write("hel"u8);
             writer.WriteByte((byte)'l');
@@ -414,7 +414,7 @@ public class TlsRecordStreamTest
 
         var transport = new MemoryStream(wire.ToArray());
         var readerRecords = new TlsRecordStream(transport) { Read = new TlsRecordProtection(suite, secret) };
-        using var reader = new RealityTlsStream(transport, readerRecords, []);
+        using var reader = new RealityTlsStream(transport, readerRecords);
 
         Assert.Equal((int)'h', reader.ReadByte());
 
