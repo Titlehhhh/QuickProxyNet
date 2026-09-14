@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.CompilerServices;
 
 namespace QuickProxyNet;
 
@@ -93,11 +92,37 @@ public abstract class ProxyClient : IProxyClient
         }
     }
 
-    public async ValueTask<Stream> ConnectAsync(string host, int port, CancellationToken cancellationToken = default)
+    public ValueTask<Stream> ConnectAsync(string host, int port, CancellationToken cancellationToken = default) =>
+        ConnectCoreAsync(host, port, timeout: null, cancellationToken);
+
+    public virtual ValueTask<Stream> ConnectAsync(string host, int port, TimeSpan timeout,
+        CancellationToken cancellationToken = default) =>
+        ConnectCoreAsync(host, port, timeout, cancellationToken);
+
+    /// <summary>The longest delay <see cref="CancellationTokenSource.CancelAfter(TimeSpan)"/> accepts.</summary>
+    private static readonly TimeSpan MaxTimeout = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
+    private async ValueTask<Stream> ConnectCoreAsync(string host, int port, TimeSpan? timeout,
+        CancellationToken cancellationToken)
     {
         ValidateArguments(host, port);
 
+        // Checked before anything is allocated. The timer this replaced rejected the same values,
+        // but only once the socket existed, and nothing disposed that socket.
+        if (timeout is { } limit && limit != Timeout.InfiniteTimeSpan && (limit < TimeSpan.Zero || limit > MaxTimeout))
+            throw new ArgumentOutOfRangeException(nameof(timeout), limit,
+                "A timeout must be between zero and about 49 days, or Timeout.InfiniteTimeSpan.");
+
         cancellationToken.ThrowIfCancellationRequested();
+
+        // The timeout is a cancellation like the caller's own, handed to every await of the connect
+        // and the handshake. It used to be a timer that disposed the socket: it could fire after
+        // the handshake had produced the stream, and the caller got a dead stream and no error.
+        using CancellationTokenSource? timeoutSource = timeout is null
+            ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource?.CancelAfter(timeout!.Value);
+        CancellationToken token = timeoutSource?.Token ?? cancellationToken;
 
         Socket socket;
         try
@@ -114,102 +139,65 @@ public abstract class ProxyClient : IProxyClient
                 $"Could not open a socket for proxy {ProxyHost}:{ProxyPort}.", ex);
         }
 
+        NetworkStream stream;
         try
         {
-            await socket.ConnectAsync(ProxyHost, ProxyPort, cancellationToken);
+            await socket.ConnectAsync(ProxyHost, ProxyPort, token);
+            // Inside the guard: on a socket that failed underneath, the constructor throws a raw
+            // IOException of its own.
+            stream = new NetworkStream(socket, ownsSocket: true);
         }
         catch (Exception ex)
         {
             socket.Dispose();
-            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
-                $"Failed to connect to proxy {ProxyHost}:{ProxyPort} for target {host}:{port}.", ex);
+            throw Stopped(ex, timeout, timeoutSource, cancellationToken)
+                ?? new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
+                    $"Failed to connect to proxy {ProxyHost}:{ProxyPort} for target {host}:{port}.", ex);
         }
 
-        var stream = new NetworkStream(socket, true);
         try
         {
-            return await ConnectAsync(stream, host, port, cancellationToken);
+            return await ConnectAsync(stream, host, port, token);
         }
-        catch (Exception ex) when (ex is IOException or SocketException)
-        {
-            // The proxy closed or reset the connection while we were still negotiating. That is
-            // the same failure class as "could not connect" from the caller's point of view, and
-            // it must arrive as one: a raw IOException here is the one place the "all protocol
-            // errors are ProxyProtocolException" promise was not kept.
-            await stream.DisposeAsync();
-            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
-                $"Proxy {ProxyHost}:{ProxyPort} closed the connection during the handshake for target {host}:{port}.", ex);
-        }
-        catch
+        catch (Exception ex)
         {
             await stream.DisposeAsync();
-            throw;
+
+            // The proxy closing or resetting the connection mid-negotiation is the same failure as
+            // "could not connect" to the caller, and must arrive as one.
+            Exception? translated = Stopped(ex, timeout, timeoutSource, cancellationToken)
+                ?? (ex is IOException or SocketException
+                    ? new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
+                        $"Proxy {ProxyHost}:{ProxyPort} closed the connection during the handshake for target {host}:{port}.", ex)
+                    : null);
+
+            if (translated is null)
+                throw;
+            throw translated;
         }
     }
 
-    public virtual async ValueTask<Stream> ConnectAsync(string host, int port, TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+    /// <summary>
+    /// What a failure means when the attempt was stopped rather than refused, or null when it was not.
+    /// </summary>
+    /// <remarks>
+    /// The caller's own cancellation is checked first, because it cancels the linked timeout source
+    /// too. It is <see cref="OperationCanceledException"/> in every phase; it used to arrive wrapped
+    /// as <see cref="ProxyErrorCode.ConnectionFailed"/> from the TCP connect and bare from the
+    /// handshake. A timeout is never an <see cref="OperationCanceledException"/>.
+    /// </remarks>
+    private Exception? Stopped(Exception ex, TimeSpan? timeout, CancellationTokenSource? timeoutSource,
+        CancellationToken cancellationToken)
     {
-        ValidateArguments(host, port);
+        if (cancellationToken.IsCancellationRequested)
+            return new OperationCanceledException(
+                $"The connection to proxy {ProxyHost}:{ProxyPort} was canceled.", ex, cancellationToken);
 
-        cancellationToken.ThrowIfCancellationRequested();
+        if (timeoutSource is { IsCancellationRequested: true })
+            return new ProxyProtocolException(ProxyErrorCode.Timeout,
+                $"Connection to proxy {ProxyHost}:{ProxyPort} timed out after {timeout}.", ex);
 
-        Socket socket;
-        try
-        {
-            socket = CreateSocket();
-        }
-        catch (SocketException ex)
-        {
-            // CreateSocket binds LocalEndPoint and allocates a handle, so it fails for reasons a
-            // caller must see as a connection failure like any other: an address already in use,
-            // or handle exhaustion under a few thousand concurrent checks. Left outside the guard
-            // this was the one path that escaped ConnectAsync as a raw SocketException.
-            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
-                $"Could not open a socket for proxy {ProxyHost}:{ProxyPort}.", ex);
-        }
-
-        var timedOut = new StrongBox<bool>(false);
-
-        await using ITimer timer = TimeProvider.System.CreateTimer(
-            static s =>
-            {
-                var state = (Tuple<Socket, StrongBox<bool>>)s!;
-                Volatile.Write(ref state.Item2.Value, true);
-                state.Item1.Dispose();
-            },
-            Tuple.Create(socket, timedOut), timeout, Timeout.InfiniteTimeSpan);
-
-        try
-        {
-            await socket.ConnectAsync(ProxyHost, ProxyPort, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            socket.Dispose();
-            if (Volatile.Read(ref timedOut.Value))
-                throw new ProxyProtocolException(ProxyErrorCode.Timeout,
-                    $"Connection to proxy {ProxyHost}:{ProxyPort} timed out after {timeout}.", ex);
-            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
-                $"Failed to connect to proxy {ProxyHost}:{ProxyPort} for target {host}:{port}.", ex);
-        }
-
-        var stream = new NetworkStream(socket, true);
-        try
-        {
-            return await ConnectAsync(stream, host, port, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            await stream.DisposeAsync();
-            if (Volatile.Read(ref timedOut.Value))
-                throw new ProxyProtocolException(ProxyErrorCode.Timeout,
-                    $"Connection to proxy {ProxyHost}:{ProxyPort} timed out after {timeout}.", ex);
-            if (ex is IOException or SocketException)
-                throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
-                    $"Proxy {ProxyHost}:{ProxyPort} closed the connection during the handshake for target {host}:{port}.", ex);
-            throw;
-        }
+        return null;
     }
 
     public abstract ValueTask<Stream> ConnectAsync(Stream source, string host, int port,

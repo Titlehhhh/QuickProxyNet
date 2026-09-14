@@ -311,6 +311,13 @@ not "clean up" any of them without reading the reasoning first.
     against it catch the first and let the other two crash the process, which is right:
     one is a dead node, the others are a bug in the calling code.
 
+    Stopping an attempt is not a failure and has its own shape. The caller's own
+    cancellation is `OperationCanceledException` carrying the caller's token, in every
+    phase; before 5.0.0 the TCP connect reported it as `ConnectionFailed` and the
+    handshake threw it bare. A timeout is `ProxyErrorCode.Timeout` and never an
+    `OperationCanceledException`. Both run through one linked token source, checked
+    caller-first, because the caller's cancellation cancels the linked source too.
+
     Two paths used to break it, and both were invisible from inside the library —
     it took a checker running the public API over thousands of real nodes to see them.
     `CreateSocket()` sat *outside* the guarded region in both overloads, so a bind
