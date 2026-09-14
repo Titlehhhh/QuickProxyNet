@@ -73,7 +73,7 @@ internal static class HttpHelper
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(credBuf);
+                ArrayPool<byte>.Shared.Return(credBuf, clearArray: true);
             }
 
             S_crlf.CopyTo(buf.AsSpan(pos)); pos += 2;
@@ -106,7 +106,8 @@ internal static class HttpHelper
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(cmd);
+            // With credentials, the request carries base64(user:password).
+            ArrayPool<byte>.Shared.Return(cmd, clearArray: credentials is not null);
         }
 
         var parser = new HttpResponseParser();
