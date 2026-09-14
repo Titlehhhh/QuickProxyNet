@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using QuickProxyNet.Tests.Helpers;
 
@@ -5,6 +6,71 @@ namespace QuickProxyNet.Tests;
 
 public class HttpHelperTest
 {
+    private static byte[] Established => Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n");
+
+    /// <summary>
+    /// The target host is written into the request line and the Host header as it is. This host,
+    /// given to the one-call API, made the proxy read an injected header and then a second request
+    /// of the caller's writing, and ConnectAsync returned a stream. Every overload now refuses it
+    /// before anything is sent.
+    /// </summary>
+    [Fact]
+    public async Task Client_HeaderInjectionThroughTheTargetHost_IsRefusedByEveryOverload()
+    {
+        const string host =
+            "example.com HTTP/1.1\r\nX-Injected: yes\r\n\r\nGET /admin HTTP/1.1\r\nHost: internal.local\r\nX-Pad: x";
+
+        using var proxy = new LoopbackConnectProxy(IPAddress.Loopback);
+        IProxyClient client = Proxy.Create($"http://127.0.0.1:{proxy.Port}");
+
+        await Assert.ThrowsAsync<ArgumentException>(() => client.ConnectAsync(host, 443).AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.ConnectAsync(host, 443, TimeSpan.FromSeconds(10)).AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(() => client.ConnectAsync(new DnsEndPoint(host, 443)).AsTask());
+
+        var stream = new FakeProxyStream(Established);
+        await Assert.ThrowsAsync<ArgumentException>(() => client.ConnectAsync(stream, host, 443).AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.ConnectAsync(stream, new DnsEndPoint(host, 443)).AsTask());
+        Assert.Empty(stream.WrittenBytes);
+    }
+
+    /// <summary>
+    /// Each of these ends or splits a line of the request, or ends a NUL-terminated field, and none
+    /// is ever part of a host name.
+    /// </summary>
+    [Theory]
+    [InlineData(0x00)]
+    [InlineData(0x09)]
+    [InlineData(0x0A)]
+    [InlineData(0x0D)]
+    [InlineData(0x1F)]
+    [InlineData(0x20)]
+    [InlineData(0x7F)]
+    public async Task Client_TargetHostWithSpaceOrControlCharacter_IsRefusedBeforeWriting(int character)
+    {
+        var stream = new FakeProxyStream(Established);
+        var client = new HttpProxyClient("proxy.example", 8080);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.ConnectAsync(stream, $"example{(char)character}com", 443).AsTask());
+
+        Assert.Equal("host", ex.ParamName);
+        Assert.Contains($"U+{character:X4} at index 7", ex.Message);
+        Assert.Empty(stream.WrittenBytes);
+    }
+
+    [Fact]
+    public async Task Client_InternationalisedTargetHost_IsStillSentAsUtf8()
+    {
+        var stream = new FakeProxyStream(Established);
+
+        await new HttpProxyClient("proxy.example", 8080).ConnectAsync(stream, "пример.рф", 443);
+
+        Assert.StartsWith("CONNECT пример.рф:443 HTTP/1.1\r\nHost: пример.рф:443\r\n",
+            Encoding.UTF8.GetString(stream.WrittenBytes));
+    }
+
     [Fact]
     public async Task EstablishTunnel_200_ReturnsStream()
     {

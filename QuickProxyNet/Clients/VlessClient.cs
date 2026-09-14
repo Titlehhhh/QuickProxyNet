@@ -91,6 +91,7 @@ public sealed class VlessClient : ProxyClient
     public override async ValueTask<Stream> ConnectAsync(Stream stream, string host, int port,
         CancellationToken cancellationToken = default)
     {
+        ValidateArguments(host, port);
         TransportKind transport = EnsureSupported();
 
         // Each layer takes ownership of the one below it, so tracking the outermost stream is

@@ -222,11 +222,32 @@ public abstract class ProxyClient : IProxyClient
         return await ConnectAsync(source, host, port, cancellationToken);
     }
 
+    /// <summary>
+    /// Checks a target the caller named. Every <c>ConnectAsync</c> overload runs this before it
+    /// sends anything, the stream overloads included, because callers reach those directly.
+    /// </summary>
     internal static void ValidateArguments(string host, int port)
     {
         ArgumentException.ThrowIfNullOrEmpty(host);
         if (host.Length > 255)
             throw new ArgumentException("A host name is at most 255 characters.", nameof(host));
+
+        // The host goes on the wire as the bytes it is: into an HTTP request line and Host header,
+        // and into SOCKS4a's NUL-terminated host field. A CR or LF there ended the CONNECT request
+        // and smuggled headers and a second request to the proxy; a NUL ended the SOCKS4a host and
+        // turned the rest into tunnel data; a space splits the request line. No host name contains
+        // any of them, so they are refused for every protocol. Non-ASCII is allowed: an
+        // internationalised name is a host name, and UTF-8 never encodes one as a byte below 0x80.
+        // The message gives the position rather than the host, which would carry the same
+        // characters into a log.
+        for (int i = 0; i < host.Length; i++)
+        {
+            if (host[i] <= ' ' || host[i] == (char)0x7F) // 0x7F is DEL
+                throw new ArgumentException(
+                    $"A target host cannot contain a space or an ASCII control character; this one has " +
+                    $"U+{(int)host[i]:X4} at index {i}.",
+                    nameof(host));
+        }
 
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(port);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(port, 65535);

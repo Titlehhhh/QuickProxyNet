@@ -62,7 +62,9 @@ public sealed class TrojanClient : ProxyClient
     public override async ValueTask<Stream> ConnectAsync(Stream stream, string host, int port,
         CancellationToken cancellationToken = default)
     {
-        // Reject unsupported transports before writing any bytes or starting the handshake.
+        // Reject a bad target and unsupported transports before writing any bytes or starting the
+        // handshake.
+        ValidateArguments(host, port);
         TransportKind transport = EnsureSupported();
 
         // SslStream(leaveInnerStreamOpen:false) disposes the inner stream too, and every layer

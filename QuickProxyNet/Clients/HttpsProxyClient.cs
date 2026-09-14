@@ -58,6 +58,9 @@ public class HttpsProxyClient : ProxyClient
     public override async ValueTask<Stream> ConnectAsync(Stream stream, string host, int port,
         CancellationToken cancellationToken = default)
     {
+        // Before the TLS handshake: a target that is refused anyway should cost no round trip.
+        ValidateArguments(host, port);
+
         var ssl = new SslStream(stream, false);
         try
         {

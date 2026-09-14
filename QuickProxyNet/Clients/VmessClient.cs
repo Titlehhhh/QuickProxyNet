@@ -122,6 +122,7 @@ public sealed class VmessClient : ProxyClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
+        ValidateArguments(host, port);
 
         // Reject unsupported transports and ciphers before writing any bytes or starting TLS.
         VmessSecurity security = EnsureSupported(out TransportKind transportKind);

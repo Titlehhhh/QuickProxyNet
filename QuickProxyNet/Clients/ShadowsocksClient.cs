@@ -101,6 +101,7 @@ public sealed class ShadowsocksClient : ProxyClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
+        ValidateArguments(host, port);
 
         ShadowsocksStream tunnel = CreateTunnel(stream);
         try

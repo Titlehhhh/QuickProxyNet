@@ -501,8 +501,10 @@ public class ShadowsocksShareLinkTest
         var transport = new FakeProxyStream([]);
         var client = ShadowsocksClient.FromShareLink($"ss://{Aes128TestUrlSafe}@example.com:8388");
 
+        // 200 characters pass the argument check, which 300 ASCII ones would not, and encode to
+        // 400 bytes: this is the address encoder's own limit.
         var ex = await Assert.ThrowsAsync<ProxyProtocolException>(async () =>
-            await client.ConnectAsync(transport, new string('a', 300), 443));
+            await client.ConnectAsync(transport, new string('ж', 200), 443));
 
         Assert.Equal(ProxyErrorCode.StringTooLong, ex.ErrorCode);
         Assert.Empty(transport.WrittenBytes);

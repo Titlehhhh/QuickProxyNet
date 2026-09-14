@@ -235,6 +235,34 @@ public class ProxyFactoryTest
         Assert.Equal(ProxyErrorCode.ConnectionFailed, ex.ErrorCode);
     }
 
+    /// <summary>
+    /// A space or an ASCII control character in the target host is the caller's mistake, refused by
+    /// every family before a byte is written. The EndPoint overloads share the check, and the stream
+    /// overload runs it itself: callers reach that one directly, not only through
+    /// ConnectAsync(host, port).
+    /// </summary>
+    [Theory]
+    [InlineData("http://127.0.0.1:{port}")]
+    [InlineData("https://127.0.0.1:{port}")]
+    [InlineData("socks4://127.0.0.1:{port}")]
+    [InlineData("socks4a://127.0.0.1:{port}")]
+    [InlineData("socks5://127.0.0.1:{port}")]
+    [InlineData("vless://" + Uuid + "@127.0.0.1:{port}?security=none")]
+    [InlineData("trojan://password@127.0.0.1:{port}")]
+    [InlineData("vmess://" + Uuid + "@127.0.0.1:{port}?type=tcp&security=none")]
+    [InlineData("ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@127.0.0.1:{port}")]
+    public async Task ConnectAsync_TargetHostWithAControlCharacter_IsRefusedByEveryFamily(string link)
+    {
+        const string host = "example.com\r\nX-Injected: yes";
+        IProxyClient client = Create(link.Replace("{port}", UnusedPort().ToString()));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => client.ConnectAsync(new DnsEndPoint(host, 443)).AsTask());
+
+        var stream = new Helpers.FakeProxyStream([]);
+        await Assert.ThrowsAsync<ArgumentException>(() => client.ConnectAsync(stream, host, 443).AsTask());
+        Assert.Empty(stream.WrittenBytes);
+    }
+
     [Fact]
     public void Create_MalformedKnownScheme_ThrowsFormat()
     {

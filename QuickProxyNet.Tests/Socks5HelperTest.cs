@@ -189,6 +189,71 @@ public class Socks5HelperTest
     }
 
     /// <summary>
+    /// SOCKS4a ends its host at the first NUL, so a host carrying one put everything after the NUL
+    /// on the wire as tunnel data, as though the caller had written it there.
+    /// </summary>
+    [Fact]
+    public async Task Socks4a_NulInTargetHost_IsRefusedBeforeWriting()
+    {
+        var stream = new FakeProxyStream([0, 90, 0, 0, 0, 0, 0, 0]);
+        var client = new Socks4aClient("proxy.example", 1080);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.ConnectAsync(stream, "good.example\0GET /admin HTTP/1.1\r\n\r\n", 443).AsTask());
+
+        Assert.Equal("host", ex.ParamName);
+        Assert.Empty(stream.WrittenBytes);
+    }
+
+    /// <summary>
+    /// The user id is NUL-terminated too. <c>alice\0evil.example</c> as the user id of a SOCKS4a
+    /// request for good.example reached the server as user alice and host evil.example, a target
+    /// the caller never named. It is refused where the credential enters, from a constructor or a
+    /// link, and no message repeats it.
+    /// </summary>
+    [Fact]
+    public void Socks4_NulInUserId_IsRefusedWhereTheCredentialEnters()
+    {
+        const string userId = "alice\0evil.example";
+
+        Exception[] refusals =
+        [
+            Assert.Throws<ArgumentException>(() =>
+                new Socks4aClient("proxy.example", 1080, new NetworkCredential(userId, ""))),
+            Assert.Throws<ArgumentException>(() =>
+                new Socks4Client("proxy.example", 1080, new NetworkCredential(userId, ""))),
+            Assert.Throws<ArgumentException>(() => Proxy.Create("socks4a://alice%00evil.example@127.0.0.1:1080")),
+            Assert.Throws<ArgumentException>(() => Proxy.Create("socks4://alice%00evil.example@127.0.0.1:1080")),
+        ];
+
+        foreach (Exception refusal in refusals)
+        {
+            Assert.Contains("NUL", refusal.Message);
+            for (Exception? e = refusal; e is not null; e = e.InnerException)
+            {
+                Assert.DoesNotContain("alice", e.Message);
+                Assert.DoesNotContain("evil", e.Message);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Socks4a_UserIdGivenANulAfterConstruction_IsRefusedBeforeWriting()
+    {
+        // NetworkCredential is mutable, so the constructor's check alone cannot keep a NUL off the wire.
+        var credentials = new NetworkCredential("alice", "");
+        var client = new Socks4aClient("proxy.example", 1080, credentials);
+        credentials.UserName = "alice\0evil.example";
+        var stream = new FakeProxyStream([0, 90, 0, 0, 0, 0, 0, 0]);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.ConnectAsync(stream, "good.example", 443).AsTask());
+
+        Assert.DoesNotContain("alice", ex.Message);
+        Assert.Empty(stream.WrittenBytes);
+    }
+
+    /// <summary>
     /// The request buffer must hold the largest message the helper writes. It was sized for the
     /// SOCKS5 username and password message, 513 bytes, while a SOCKS4a request carrying a
     /// 255-byte user id and a 255-byte host is 520. Nothing failed only because ArrayPool hands

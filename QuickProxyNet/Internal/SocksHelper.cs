@@ -189,6 +189,10 @@ internal static class SocksHelper
     internal static async ValueTask EstablishSocks4TunnelAsync(Stream stream, bool isVersion4a, string host, int port,
         NetworkCredential? credentials, CancellationToken cancellationToken)
     {
+        // The client constructors have checked this already, but NetworkCredential is mutable, and a
+        // user name changed after construction must not reach the wire either.
+        ValidateUserId(credentials, nameof(credentials));
+
         var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
 
         try
@@ -292,6 +296,24 @@ internal static class SocksHelper
             // The request held the username and password (SOCKS5) or the user id (SOCKS4).
             ArrayPool<byte>.Shared.Return(buffer, clearArray: credentials is not null);
         }
+    }
+
+    /// <summary>
+    /// Refuses a SOCKS4 user id the wire format cannot carry: one with a NUL in it.
+    /// </summary>
+    /// <remarks>
+    /// SOCKS4 ends the user id at its first NUL, and the proxy reads whatever follows as the next
+    /// field. For SOCKS4a that is the host, so <c>alice\0evil.example</c> as the user id of a request
+    /// for <c>good.example</c> reached the proxy as user <c>alice</c> asking for
+    /// <c>evil.example</c>. The message never includes the user id, which is a credential.
+    /// </remarks>
+    internal static void ValidateUserId(NetworkCredential? credentials, string paramName)
+    {
+        if (credentials is not null && credentials.UserName.Contains('\0'))
+            throw new ArgumentException(
+                "A SOCKS4 user id cannot contain a NUL character: the protocol ends the user id at the " +
+                "first one, and the proxy would read what follows as the next field.",
+                paramName);
     }
 
     private static byte EncodeString(ReadOnlySpan<char> chars, Span<byte> buffer, string parameterName)
