@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.CompilerServices;
 
 namespace QuickProxyNet;
@@ -78,7 +79,7 @@ internal sealed class RealityTlsStream : Stream
             return new ValueTask<int>(0);
 
         if (!_pending.IsEmpty)
-            return new ValueTask<int>(TakePending(buffer));
+            return new ValueTask<int>(TakePending(buffer.Span));
 
         if (_receivedCloseNotify)
             return new ValueTask<int>(0);
@@ -98,14 +99,14 @@ internal sealed class RealityTlsStream : Stream
                 return 0;
         }
 
-        return TakePending(buffer);
+        return TakePending(buffer.Span);
     }
 
     /// <summary>Copies out of the record in hand and advances past what was taken.</summary>
-    private int TakePending(Memory<byte> buffer)
+    private int TakePending(Span<byte> buffer)
     {
         int count = Math.Min(buffer.Length, _pending.Length);
-        _pending.Span[..count].CopyTo(buffer.Span);
+        _pending.Span[..count].CopyTo(buffer);
         _pending = _pending[count..];
 
         return count;
@@ -219,11 +220,56 @@ internal sealed class RealityTlsStream : Stream
     public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
         WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
 
-    public override int Read(byte[] buffer, int offset, int count) =>
-        ReadAsync(buffer.AsMemory(offset, count), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+    public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+    /// <remarks>
+    /// Overridden rather than inherited: <see cref="Stream"/>'s own span overloads rent an array,
+    /// go through it and hand it back to the shared pool uncleared, which would leave decrypted
+    /// application data in memory the next renter reads. A record already in hand is copied
+    /// straight out; only waiting for the next one goes through the async path.
+    /// </remarks>
+    public override int Read(Span<byte> buffer)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (buffer.IsEmpty)
+            return 0;
+
+        if (_pending.IsEmpty &&
+            (_receivedCloseNotify || !FillAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult()))
+            return 0;
+
+        return TakePending(buffer);
+    }
+
+    public override int ReadByte()
+    {
+        Span<byte> one = stackalloc byte[1];
+        return Read(one) == 1 ? one[0] : -1;
+    }
 
     public override void Write(byte[] buffer, int offset, int count) =>
         WriteAsync(buffer.AsMemory(offset, count), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+
+    /// <remarks>
+    /// The record layer takes memory, not a span, so the data is copied into a rented array —
+    /// which, unlike in <see cref="Stream"/>'s own fallback, is cleared before it goes back.
+    /// </remarks>
+    public override void Write(ReadOnlySpan<byte> buffer)
+    {
+        byte[] rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
+        try
+        {
+            buffer.CopyTo(rented);
+            Write(rented, 0, buffer.Length);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+        }
+    }
+
+    public override void WriteByte(byte value) => Write(new ReadOnlySpan<byte>(in value));
 
     public override void Flush() => _transport.Flush();
 

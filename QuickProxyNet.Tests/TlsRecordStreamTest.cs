@@ -393,6 +393,41 @@ public class TlsRecordStreamTest
         Assert.Contains("no application data", ex.Message);
     }
 
+    /// <summary>
+    /// The synchronous span overloads are overridden rather than inherited — Stream's fallback
+    /// leaves decrypted data in an uncleared pooled array — so they must carry the same bytes.
+    /// </summary>
+    [Fact]
+    public void AfterHandshake_SyncSpanWriteAndRead_RoundTripThroughTheRecordLayer()
+    {
+        TlsCipherSuite suite = Suite(Aes128Gcm);
+        byte[] secret = Secret(suite);
+
+        var wire = new MemoryStream();
+        var writerRecords = new TlsRecordStream(wire) { Write = new TlsRecordProtection(suite, secret) };
+        using (var writer = new RealityTlsStream(wire, writerRecords, []))
+        {
+            writer.Write("hel"u8);
+            writer.WriteByte((byte)'l');
+            writer.Write("o, world"u8);
+        }
+
+        var transport = new MemoryStream(wire.ToArray());
+        var readerRecords = new TlsRecordStream(transport) { Read = new TlsRecordProtection(suite, secret) };
+        using var reader = new RealityTlsStream(transport, readerRecords, []);
+
+        Assert.Equal((int)'h', reader.ReadByte());
+
+        var received = new MemoryStream();
+        Span<byte> chunk = stackalloc byte[3];
+        int read;
+        while ((read = reader.Read(chunk)) > 0)
+            received.Write(chunk[..read]);
+
+        Assert.Equal("ello, world", System.Text.Encoding.ASCII.GetString(received.ToArray()));
+        Assert.Equal(-1, reader.ReadByte());
+    }
+
     /// <summary>A tampered record does not open.</summary>
     [Fact]
     public async Task TamperedRecord_FailsItsTagCheck()

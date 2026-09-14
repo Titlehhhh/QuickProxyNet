@@ -133,6 +133,38 @@ internal sealed class WebSocketStream : Stream
         byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
         WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
 
+    // Stream's own span overloads rent an array, go through it and hand it back to the shared pool
+    // uncleared, which would leave tunnel bytes — a VLESS id among them — in memory the next
+    // renter reads. These take the same route but clear the array on the way back.
+    public override int Read(Span<byte> buffer)
+    {
+        byte[] rented = System.Buffers.ArrayPool<byte>.Shared.Rent(buffer.Length);
+        try
+        {
+            int read = Read(rented, 0, buffer.Length);
+            rented.AsSpan(0, read).CopyTo(buffer);
+            return read;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+        }
+    }
+
+    public override void Write(ReadOnlySpan<byte> buffer)
+    {
+        byte[] rented = System.Buffers.ArrayPool<byte>.Shared.Rent(buffer.Length);
+        try
+        {
+            buffer.CopyTo(rented);
+            Write(rented, 0, buffer.Length);
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+        }
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
