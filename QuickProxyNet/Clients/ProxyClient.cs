@@ -9,15 +9,13 @@ public abstract class ProxyClient : IProxyClient
 
     protected ProxyClient(string protocol, string host, int port)
     {
-        if (host == null)
-            throw new ArgumentNullException(nameof(host));
+        ArgumentException.ThrowIfNullOrEmpty(host);
+        if (host.Length > 255)
+            throw new ArgumentException("A host name is at most 255 characters.", nameof(host));
 
-        if (host.Length == 0 || host.Length > 255)
-            throw new ArgumentException("The length of the host name must be between 0 and 256 characters.",
-                nameof(host));
-
-        if (port < 0 || port > 65535)
-            throw new ArgumentOutOfRangeException(nameof(port));
+        // Zero is allowed here and means the default port.
+        ArgumentOutOfRangeException.ThrowIfNegative(port);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(port, 65535);
 
         _scheme = protocol;
         // An IPv6 literal is kept unbracketed however it arrived: a Uri authority hands over
@@ -228,15 +226,12 @@ public abstract class ProxyClient : IProxyClient
 
     internal static void ValidateArguments(string host, int port)
     {
-        if (host == null)
-            throw new ArgumentNullException(nameof(host));
+        ArgumentException.ThrowIfNullOrEmpty(host);
+        if (host.Length > 255)
+            throw new ArgumentException("A host name is at most 255 characters.", nameof(host));
 
-        if (host.Length == 0 || host.Length > 255)
-            throw new ArgumentException("The length of the host name must be between 0 and 256 characters.",
-                nameof(host));
-
-        if (port <= 0 || port > 65535)
-            throw new ArgumentOutOfRangeException(nameof(port));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(port);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(port, 65535);
     }
 
     // The EndPoint overloads spell the target the way the host-and-port ones take it. An

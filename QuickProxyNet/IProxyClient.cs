@@ -94,7 +94,10 @@ public interface IProxyClient
     /// </summary>
     /// <param name="host">The target host to connect to.</param>
     /// <param name="port">The target port on the host.</param>
-    /// <param name="timeout">The maximum time, in milliseconds, to wait for a connection to the host.</param>
+    /// <param name="timeout">
+    /// The maximum time to wait for the connection to the proxy and the handshake through it, or
+    /// <see cref="Timeout.InfiniteTimeSpan"/>. Running out ends in <see cref="ProxyErrorCode.Timeout"/>.
+    /// </param>
     /// <param name="cancellationToken">A cancellation token that can be used to cancel the connection attempt.</param>
     /// <returns>A <see cref="ValueTask"/> representing the asynchronous operation and yielding the connected <see cref="Stream"/>.</returns>
     ValueTask<Stream> ConnectAsync(string host, int port, TimeSpan timeout, CancellationToken cancellationToken = default);
