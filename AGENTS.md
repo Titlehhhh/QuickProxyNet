@@ -419,6 +419,16 @@ with the raw token in the message. Discovery-time `FactAttribute.Skip` is the
 mechanism that actually works, and environment variables do not change mid-run,
 so evaluating the gate in the attribute constructor is exact.
 
+**A failed `Debug.Assert` fails only the test that hit it.** `dotnet test` runs the Debug build, so
+the library's asserts are live in the suite. testhost's trace listener turns a failed one into a
+`DebugAssertException` on the asserting thread, which fails the test awaiting it; from a thread
+nobody awaits, it crashes the test host and aborts the run. Asserts are for invariants that only a
+bug in this library can break, never for anything a peer, a share link or a caller controls: that
+must throw, because an assert is gone from the Release build and a hostile peer walks past it. And
+anything that catches `Exception` hides a failed assert — `Assert.ThrowsAny<Exception>`, a `catch`
+that only inspects a message, or a test that accepts whatever reason `Proxy.TryCreate` gives. Assert
+the exact exception type the code throws.
+
 If a docker run is interrupted, clean up with:
 
 ```bash
