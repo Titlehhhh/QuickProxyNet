@@ -40,6 +40,9 @@ All public library types live in the `QuickProxyNet` namespace.
 - `ProxyUriExtensions` adds `Uri.ConnectThroughProxyAsync(...)`.
 - `IProxyClient` is the client contract; connection methods return
   `ValueTask<Stream>`. `SourceLink` carries the text the client was built from.
+  A target is `host, port` or an `EndPoint` (`DnsEndPoint` / `IPEndPoint`); the
+  `EndPoint` overloads are default interface members that forward to the
+  host-and-port ones, so an implementation outside `ProxyClient` gets them free.
 - `ProxyClient` owns common socket setup, timeout handling, and argument
   validation.
 - `ProxyProtocolException` carries a structured `ProxyErrorCode`.

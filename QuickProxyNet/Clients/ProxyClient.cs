@@ -245,6 +245,29 @@ public abstract class ProxyClient : IProxyClient
     public abstract ValueTask<Stream> ConnectAsync(Stream source, string host, int port,
         CancellationToken cancellationToken = default);
 
+    /// <inheritdoc />
+    public async ValueTask<Stream> ConnectAsync(EndPoint target, CancellationToken cancellationToken = default)
+    {
+        var (host, port) = SplitTarget(target);
+        return await ConnectAsync(host, port, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<Stream> ConnectAsync(EndPoint target, TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        var (host, port) = SplitTarget(target);
+        return await ConnectAsync(host, port, timeout, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<Stream> ConnectAsync(Stream source, EndPoint target,
+        CancellationToken cancellationToken = default)
+    {
+        var (host, port) = SplitTarget(target);
+        return await ConnectAsync(source, host, port, cancellationToken);
+    }
+
     internal static void ValidateArguments(string host, int port)
     {
         if (host == null)
@@ -256,5 +279,23 @@ public abstract class ProxyClient : IProxyClient
 
         if (port <= 0 || port > 65535)
             throw new ArgumentOutOfRangeException(nameof(port));
+    }
+
+    // The EndPoint overloads spell the target the way the host-and-port ones take it. An
+    // IPv4-mapped address is an IPv4 host however a dual-mode socket reports it; left as IPv6,
+    // SOCKS5, VLESS, VMess and Trojan would all put an IPv6 address type on the wire for it.
+    internal static (string Host, int Port) SplitTarget(EndPoint target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+
+        return target switch
+        {
+            DnsEndPoint dns => (dns.Host, dns.Port),
+            IPEndPoint ip => (
+                (ip.Address.IsIPv4MappedToIPv6 ? ip.Address.MapToIPv4() : ip.Address).ToString(), ip.Port),
+            _ => throw new ArgumentException(
+                $"A proxy target must be a {nameof(DnsEndPoint)} or an {nameof(IPEndPoint)}, not {target.GetType().Name}.",
+                nameof(target))
+        };
     }
 }

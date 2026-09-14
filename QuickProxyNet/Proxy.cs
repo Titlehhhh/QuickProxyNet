@@ -62,6 +62,46 @@ public static class Proxy
     }
 
     /// <summary>
+    /// Connects to a target endpoint through a proxy described by a URL or share link.
+    /// </summary>
+    /// <param name="proxyLink">The proxy URL or share link, in any scheme <see cref="Create(string)"/> accepts.</param>
+    /// <param name="target">
+    /// A <see cref="DnsEndPoint"/>, whose name the proxy resolves, or an <see cref="IPEndPoint"/>.
+    /// </param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <returns>A connected <see cref="Stream"/> tunneled through the proxy.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="target"/> is neither a <see cref="DnsEndPoint"/> nor an <see cref="IPEndPoint"/>.
+    /// </exception>
+    public static async ValueTask<Stream> ConnectAsync(string proxyLink, EndPoint target,
+        CancellationToken cancellationToken = default)
+    {
+        IProxyClient client = Create(proxyLink);
+        return await client.ConnectAsync(target, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Connects to a target endpoint through a proxy described by a URL or share link, giving up
+    /// after <paramref name="timeout"/>.
+    /// </summary>
+    /// <param name="proxyLink">The proxy URL or share link, in any scheme <see cref="Create(string)"/> accepts.</param>
+    /// <param name="target">
+    /// A <see cref="DnsEndPoint"/>, whose name the proxy resolves, or an <see cref="IPEndPoint"/>.
+    /// </param>
+    /// <param name="timeout">Maximum time to wait for the connection to complete.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <returns>A connected <see cref="Stream"/> tunneled through the proxy.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="target"/> is neither a <see cref="DnsEndPoint"/> nor an <see cref="IPEndPoint"/>.
+    /// </exception>
+    public static async ValueTask<Stream> ConnectAsync(string proxyLink, EndPoint target, TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        IProxyClient client = Create(proxyLink);
+        return await client.ConnectAsync(target, timeout, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Connects to a target host through the specified proxy.
     /// Opens a socket, negotiates the tunnel, and returns the connected stream.
     /// The caller owns the returned <see cref="Stream"/> and must dispose it.

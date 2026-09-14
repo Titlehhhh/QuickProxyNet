@@ -68,6 +68,18 @@ client.ReadTimeout = 5000;
 await using var stream = await client.ConnectAsync("example.com", 443);
 ```
 
+### Target as an EndPoint
+
+`IProxyClient.ConnectAsync` and `Proxy.ConnectAsync(link, ...)` also take the target as an `EndPoint`, the way `Socket.ConnectAsync` does: a `DnsEndPoint` for a name the proxy resolves, or an `IPEndPoint`. That is what `SocketsHttpHandler.ConnectCallback` hands over, so an `HttpClient` goes through any proxy this library speaks in one line:
+
+```csharp
+var proxy = Proxy.Create("vless://...");
+using var http = new HttpClient(new SocketsHttpHandler
+{
+    ConnectCallback = (context, ct) => proxy.ConnectAsync(context.DnsEndPoint, ct)
+});
+```
+
 ### With explicit proxy type and credentials
 
 ```csharp
