@@ -61,16 +61,6 @@ public interface IProxyClient
     bool NoDelay { get; set; }
 
     /// <summary>
-    /// Gets or sets the write timeout in milliseconds for sending data through the proxy.
-    /// </summary>
-    int WriteTimeout { get; set; }
-
-    /// <summary>
-    /// Gets or sets the read timeout in milliseconds for receiving data through the proxy.
-    /// </summary>
-    int ReadTimeout { get; set; }
-
-    /// <summary>
     /// Asynchronously connects to a target host and port through the proxy.
     /// </summary>
     /// <param name="host">The target host to connect to.</param>

@@ -56,7 +56,6 @@ await using var stream = await Proxy.ConnectAsync(
 ```csharp
 var client = Proxy.Create("socks5://proxy:1080");
 client.NoDelay = true;
-client.ReadTimeout = 5000;
 
 await using var stream = await client.ConnectAsync("example.com", 443);
 ```
@@ -244,9 +243,12 @@ When using the factory/client API, each client supports:
 |---|---|---|
 | `NoDelay` | `true` | Disable Nagle algorithm |
 | `LingerState` | `Linger(true, 0)` | Socket linger on close |
-| `ReadTimeout` | `0` (infinite) | Read timeout in ms |
-| `WriteTimeout` | `0` (infinite) | Write timeout in ms |
 | `LocalEndPoint` | `null` | Bind to specific local IP |
+
+There is no read or write timeout on the client. The `TimeSpan` overloads of `ConnectAsync` bound
+the connection and the handshake. For reads and writes on the returned stream, pass a
+`CancellationToken` to the async calls, or set the stream's own `ReadTimeout` / `WriteTimeout`
+when its `CanTimeout` is `true`.
 
 ## License
 

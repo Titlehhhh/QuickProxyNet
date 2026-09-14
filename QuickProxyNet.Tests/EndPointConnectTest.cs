@@ -111,8 +111,6 @@ public class EndPointConnectTest
         public IPEndPoint? LocalEndPoint { get; set; }
         public LingerOption? LingerState { get; set; }
         public bool NoDelay { get; set; }
-        public int WriteTimeout { get; set; }
-        public int ReadTimeout { get; set; }
 
         public ValueTask<Stream> ConnectAsync(string host, int port, CancellationToken cancellationToken = default) =>
             Record(host, port, "host, port");

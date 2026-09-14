@@ -42,6 +42,10 @@ All public library types live in the `QuickProxyNet` namespace.
   for the other VPN-style families, and could not even hold a password containing
   `@`. `Proxy.Create(Uri)` stays as an adapter for `WebProxy.Address` and
   `IWebProxy.GetProxy`; `ProxyClient.ToString()` is `scheme://host:port` for logs.
+- There is no `IProxyClient.ReadTimeout` / `WriteTimeout` (removed in 5.0.0). They were
+  copied to `Socket.ReceiveTimeout` / `SendTimeout`, which bind only synchronous calls, so
+  they never applied to a handshake. Do not bring them back: the `TimeSpan` overloads of
+  `ConnectAsync` bound the handshake, and a caller bounds reads on the returned stream.
 - `IProxyClient` is the client contract; connection methods return
   `ValueTask<Stream>`. `SourceLink` carries the text the client was built from.
   A target is `host, port` or an `EndPoint` (`DnsEndPoint` / `IPEndPoint`); the

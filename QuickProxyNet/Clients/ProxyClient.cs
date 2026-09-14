@@ -58,9 +58,6 @@ public abstract class ProxyClient : IProxyClient
     public LingerOption? LingerState { get; set; } = new LingerOption(true, 0);
     public bool NoDelay { get; set; } = true;
 
-    public int WriteTimeout { get; set; }
-    public int ReadTimeout { get; set; }
-
     private Socket CreateSocket()
     {
         // Socket(SocketType, ProtocolType) is dual-mode wherever the OS has IPv6, so the proxy is
@@ -72,9 +69,10 @@ public abstract class ProxyClient : IProxyClient
             : new Socket(local.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
         try
         {
+            // No SendTimeout or ReceiveTimeout: they bound only synchronous socket calls, and every
+            // read and write of the handshake is asynchronous. The timeout and the token given to
+            // ConnectAsync are what bound it.
             socket.NoDelay = NoDelay;
-            socket.SendTimeout = WriteTimeout;
-            socket.ReceiveTimeout = ReadTimeout;
             if (LingerState is not null)
                 socket.LingerState = LingerState;
             if (local is not null)

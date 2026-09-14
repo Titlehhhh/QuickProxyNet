@@ -381,8 +381,6 @@ internal sealed class LiveProber(TimeSpan timeout)
         try
         {
             var client = node.CreateClient();
-            client.ReadTimeout = (int)timeout.TotalMilliseconds;
-            client.WriteTimeout = (int)timeout.TotalMilliseconds;
 
             // ConnectAsync's own timer aborts the socket, but DNS resolution happens before
             // the socket exists, so keep an outer hard bound as well.
