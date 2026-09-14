@@ -143,7 +143,7 @@ public class Socks5HelperTest
         Assert.Equal(ProxyErrorCode.ConnectionFailed, ex.ErrorCode);
     }
 
-    // ArrayPool rounds the 513-byte request buffer up to 1024, so a string of 256 to about 1000
+    // ArrayPool rounds the 520-byte request buffer up to 1024, so a string of 256 to about 1000
     // UTF-8 bytes fits the buffer but not the one-byte length field. It used to escape as a raw
     // OverflowException, outside ConnectAsync's exception contract.
     [Theory]
@@ -186,6 +186,71 @@ public class Socks5HelperTest
                 .AsTask());
 
         Assert.Equal(ProxyErrorCode.SocksStringTooLong, ex.ErrorCode);
+    }
+
+    /// <summary>
+    /// The request buffer must hold the largest message the helper writes. It was sized for the
+    /// SOCKS5 username and password message, 513 bytes, while a SOCKS4a request carrying a
+    /// 255-byte user id and a 255-byte host is 520. Nothing failed only because ArrayPool hands
+    /// out 1024 bytes for either size, which is also why the size is checked here directly.
+    /// </summary>
+    [Fact]
+    public async Task BufferSize_HoldsTheLargestMessageTheHelperWrites()
+    {
+        string longest = new('x', 255);
+        byte[] longestBytes = Encoding.ASCII.GetBytes(longest);
+
+        var socks4a = new WriteRecordingStream([0, 90, 0, 0, 0, 0, 0, 0]);
+        await SocksHelper.EstablishSocks4TunnelAsync(socks4a, true, longest, 443,
+            new NetworkCredential(longest, ""), CancellationToken.None);
+
+        byte[] request = [4, 1, 443 >> 8, 443 & 0xFF, 0, 0, 0, 255, .. longestBytes, 0, .. longestBytes, 0];
+        Assert.Equal(request, socks4a.Written);
+
+        var socks5 = new WriteRecordingStream([5, 2, 1, 0, 5, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+        await SocksHelper.EstablishSocks5TunnelAsync(socks5, longest, 443,
+            new NetworkCredential(longest, longest), CancellationToken.None);
+
+        Assert.Equal(520, socks4a.LargestWrite);
+        Assert.Equal(513, socks5.LargestWrite);
+        Assert.Equal(SocksHelper.BufferSize, Math.Max(socks4a.LargestWrite, socks5.LargestWrite));
+    }
+
+    /// <summary>Replays a scripted reply, and records what was written and the largest single write.</summary>
+    private sealed class WriteRecordingStream(byte[] reply) : Stream
+    {
+        private readonly MemoryStream _reply = new(reply);
+        private readonly MemoryStream _written = new();
+
+        public byte[] Written => _written.ToArray();
+
+        public int LargestWrite { get; private set; }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override int Read(byte[] buffer, int offset, int count) => _reply.Read(buffer, offset, count);
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) =>
+            _reply.ReadAsync(buffer, ct);
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            LargestWrite = Math.Max(LargestWrite, count);
+            _written.Write(buffer, offset, count);
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default)
+        {
+            LargestWrite = Math.Max(LargestWrite, buffer.Length);
+            return _written.WriteAsync(buffer, ct);
+        }
     }
 
     [Fact]

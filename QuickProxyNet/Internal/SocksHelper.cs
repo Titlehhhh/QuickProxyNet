@@ -9,8 +9,17 @@ namespace QuickProxyNet;
 
 internal static class SocksHelper
 {
-    // Largest possible message size is 513 bytes (Socks5 username & password auth)
-    private const int BufferSize = 513;
+    // One buffer holds every message this helper writes, so it is sized for the largest of them:
+    //   SOCKS4a request  VN(1) CD(1) DSTPORT(2) DSTIP(4) USERID(255) NUL(1) HOST(255) NUL(1)  520
+    //   SOCKS5 auth      VER(1) ULEN(1) UNAME(255) PLEN(1) PASSWD(255)                        513
+    //   SOCKS4 request   VN(1) CD(1) DSTPORT(2) DSTIP(4) USERID(255) NUL(1)                   264
+    //   SOCKS5 request   VER(1) CMD(1) RSV(1) ATYP(1) LEN(1) DST.ADDR(255) DST.PORT(2)        262
+    //   SOCKS5 greeting  VER(1) NMETHODS(1) METHODS(2)                                          4
+    // Replies are read into the same buffer and are smaller: at most 257 bytes in one read (the
+    // rest of a SOCKS5 reply naming a domain), 8 for SOCKS4. It was 513, which a SOCKS4a request
+    // with a long user id and host does not fit; ArrayPool rounding the rental up to 1024 is the
+    // only reason that worked.
+    internal const int BufferSize = 520;
     private const int ProtocolVersion4 = 4;
     private const int ProtocolVersion5 = 5;
     private const int SubnegotiationVersion = 1; // Socks5 username & password auth
@@ -288,7 +297,7 @@ internal static class SocksHelper
     private static byte EncodeString(ReadOnlySpan<char> chars, Span<byte> buffer, string parameterName)
     {
         // The length goes out as a single byte, so the write is capped at 255 whatever room the
-        // rented buffer has. ArrayPool rounds 513 up to 1024, and a string that fit the buffer but
+        // rented buffer has. ArrayPool rounds 520 up to 1024, and a string that fit the buffer but
         // not the length byte used to escape ConnectAsync as an OverflowException from the cast.
         if (!Encoding.UTF8.TryGetBytes(chars, buffer[..Math.Min(buffer.Length, 255)], out int written))
             throw new ProxyProtocolException(ProxyErrorCode.SocksStringTooLong,
