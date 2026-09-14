@@ -361,6 +361,25 @@ public class VmessClientTest
         Assert.Equal("from fragment", o.Remark);
     }
 
+    // Go's base64 decoder, which Xray and most producers run, ignores the unused low bits of the
+    // last character. .NET 10 ignores them too; .NET 11 rejects the group, so this link used to
+    // parse on one of the test project's targets and not the other.
+    [Fact]
+    public void TryParse_UnusedTrailingBase64BitsSet_ParsesOnEveryTarget()
+    {
+        string json = MinimalJson();
+        while (Encoding.UTF8.GetByteCount(json) % 3 != 1)
+            json += " ";
+
+        char[] link = Link(json).ToCharArray();
+        const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        int last = link.Length - 3; // the data character before "=="
+        link[last] = alphabet[alphabet.IndexOf(link[last]) | 0x0F];
+
+        Assert.True(VmessShareLink.TryParse(new string(link), out var o));
+        Assert.Equal(ProxyHost, o.Host);
+    }
+
     // ===================== grammar 2: the standard URI form =====================
     //
     // vmess://{uuid}@{host}:{port}?{query}#{remark} — 48 links in the corpus. The query

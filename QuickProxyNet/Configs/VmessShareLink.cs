@@ -385,15 +385,17 @@ public static class VmessShareLink
         => value.IndexOf('%') < 0 ? value.ToString() : Uri.UnescapeDataString(value.ToString());
 
     /// <summary>
-    /// Decodes a payload that uses the URL-safe alphabet and/or omits its padding.
+    /// Decodes a payload the fast path refused: the URL-safe alphabet, missing padding, or unused
+    /// trailing bits left set, which .NET 11 rejects where .NET 10 and Go accept them.
     /// </summary>
     private static bool TryDecodeRelaxed(ReadOnlySpan<char> payload, Span<byte> destination, out int length)
     {
         // Padding may add up to 3 characters to the normalized form.
         char[] chars = ArrayPool<char>.Shared.Rent(payload.Length + 3);
+        int charCount = 0;
         try
         {
-            if (!TryNormalizeBase64(payload, chars, out int charCount))
+            if (!ShareLinkBase64.TryNormalize(payload, chars, out charCount))
             {
                 length = 0;
                 return false;
@@ -403,46 +405,10 @@ public static class VmessShareLink
         }
         finally
         {
+            // The JSON inside carries the user id.
+            Array.Clear(chars, 0, charCount);
             ArrayPool<char>.Shared.Return(chars);
         }
-    }
-
-    /// <summary>
-    /// Copies <paramref name="payload"/> into <paramref name="destination"/>, translating
-    /// the URL-safe alphabet to the standard one, dropping whitespace, and appending the
-    /// <c>=</c> padding <see cref="Convert.TryFromBase64Chars"/> requires.
-    /// </summary>
-    private static bool TryNormalizeBase64(
-        ReadOnlySpan<char> payload, Span<char> destination, out int length)
-    {
-        length = 0;
-
-        for (int i = 0; i < payload.Length; i++)
-        {
-            char c = payload[i];
-            if (char.IsWhiteSpace(c))
-                continue;
-
-            destination[length++] = c switch
-            {
-                '-' => '+',
-                '_' => '/',
-                _ => c
-            };
-        }
-
-        // Trailing padding may already be present; only top it up to a 4-character group.
-        int remainder = length % 4;
-        if (remainder == 1)
-            return false; // no base64 string can have this length
-
-        if (remainder != 0)
-        {
-            for (int i = remainder; i < 4; i++)
-                destination[length++] = '=';
-        }
-
-        return length > 0;
     }
 
     private static bool TryParseJson(

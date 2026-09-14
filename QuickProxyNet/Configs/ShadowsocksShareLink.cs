@@ -428,26 +428,8 @@ public static class ShadowsocksShareLink
         bool handedOver = false;
         try
         {
-            for (int i = 0; i < payload.Length; i++)
-            {
-                char c = payload[i];
-                if (char.IsWhiteSpace(c))
-                    continue;
-
-                chars[length++] = c switch
-                {
-                    '-' => '+',
-                    '_' => '/',
-                    _ => c
-                };
-            }
-
-            int remainder = length % 4;
-            if (remainder == 1)
-                return false; // no base64 string has this length
-
-            for (int i = remainder; remainder != 0 && i < 4; i++)
-                chars[length++] = '=';
+            if (!ShareLinkBase64.TryNormalize(payload, chars, out length))
+                return false;
 
             if (!Convert.TryFromBase64Chars(chars.AsSpan(0, length), bytes, out decoded) || decoded == 0)
                 return false;
