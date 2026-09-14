@@ -82,6 +82,26 @@ public class HttpHelperTest
         Assert.DoesNotContain("Proxy-Authorization", sent);
     }
 
+    [Theory]
+    [InlineData("2001:db8::1", "[2001:db8::1]")]
+    [InlineData("[2001:db8::1]", "[2001:db8::1]")]
+    [InlineData("::ffff:192.0.2.1", "[::ffff:192.0.2.1]")]
+    [InlineData("192.0.2.1", "192.0.2.1")]
+    [InlineData("target.com", "target.com")]
+    public async Task EstablishTunnel_BracketsIPv6LiteralTarget(string host, string authorityHost)
+    {
+        // "CONNECT 2001:db8::1:443" cannot be parsed: the address's colons run into the port.
+        // RFC 9112 §3.2.3 takes the authority from RFC 3986, where an IPv6 literal is bracketed.
+        var response = Encoding.UTF8.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n");
+        var stream = new FakeProxyStream(response);
+
+        await HttpHelper.EstablishHttpTunnelAsync(stream, ProxyUri, host, 443, null,
+            CancellationToken.None);
+
+        var sent = Encoding.UTF8.GetString(stream.WrittenBytes);
+        Assert.StartsWith($"CONNECT {authorityHost}:443 HTTP/1.1\r\nHost: {authorityHost}:443\r\n", sent);
+    }
+
     [Fact]
     public async Task EstablishTunnel_SendsCorrectCommand_WithAuth()
     {
