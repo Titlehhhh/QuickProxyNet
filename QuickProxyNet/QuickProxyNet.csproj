@@ -4,6 +4,9 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <LangVersion>latest</LangVersion>
+        <!-- Turns on the trim, AOT and single-file analyzers, so a reflection-based dependency
+             (a JsonSerializer call, say) fails the build instead of a user's published app. -->
+        <IsAotCompatible>true</IsAotCompatible>
         <MinVerTagPrefix>v</MinVerTagPrefix>
         <MinVerMinimumMajorMinor>4.0</MinVerMinimumMajorMinor>
     </PropertyGroup>
