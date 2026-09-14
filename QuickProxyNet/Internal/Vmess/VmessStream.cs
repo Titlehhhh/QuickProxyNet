@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 
 namespace QuickProxyNet;
@@ -166,6 +167,7 @@ internal sealed class VmessStream : Stream
     // ================================ reading ================================
 
     /// <inheritdoc/>
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public override async ValueTask<int> ReadAsync(
         Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
@@ -240,6 +242,7 @@ internal sealed class VmessStream : Stream
 
     // Reads one sealed chunk (length prefix + ciphertext + tag) into _receiveSealed and
     // returns the sealed length. The chunk is not opened yet.
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     private async ValueTask<int> ReceiveSealedChunkAsync(CancellationToken cancellationToken)
     {
         _receiveSealed ??= ArrayPool<byte>.Shared.Rent(InitialReceiveBufferSize);
@@ -308,6 +311,7 @@ internal sealed class VmessStream : Stream
     // ================================ writing ================================
 
     /// <inheritdoc/>
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public override async ValueTask WriteAsync(
         ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
     {

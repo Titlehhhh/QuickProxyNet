@@ -129,14 +129,23 @@ internal sealed class VlessResponseStream : Stream
     // ================================ reading ================================
 
     /// <inheritdoc/>
-    public override async ValueTask<int> ReadAsync(
+    /// <remarks>
+    /// Not async once the header is in: from then on this is a pass-through, and an async method
+    /// would box its state machine on every read that does not complete at once.
+    /// </remarks>
+    public override ValueTask<int> ReadAsync(
         Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (!_headerRead)
-            await ReadHeaderAsync(cancellationToken).ConfigureAwait(false);
+        return _headerRead
+            ? _inner.ReadAsync(buffer, cancellationToken)
+            : ReadAfterHeaderAsync(buffer, cancellationToken);
+    }
 
+    private async ValueTask<int> ReadAfterHeaderAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+    {
+        await ReadHeaderAsync(cancellationToken).ConfigureAwait(false);
         return await _inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
     }
 

@@ -44,16 +44,18 @@ internal sealed class PrefixedStream(byte[] prefix, Stream inner) : Stream
     public override int Read(byte[] buffer, int offset, int count) =>
         Read(buffer.AsSpan(offset, count));
 
-    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+    // Not async: once the prefix is used up this is a pass-through, and an async method would box
+    // its state machine on every read that does not complete at once, for the life of the tunnel.
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
     {
         if (_offset < prefix.Length)
         {
             int count = Math.Min(buffer.Length, prefix.Length - _offset);
             prefix.AsMemory(_offset, count).CopyTo(buffer);
             _offset += count;
-            return count;
+            return new ValueTask<int>(count);
         }
-        return await inner.ReadAsync(buffer, ct).ConfigureAwait(false);
+        return inner.ReadAsync(buffer, ct);
     }
 
     public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>

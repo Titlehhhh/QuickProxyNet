@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Net.WebSockets;
+using System.Runtime.CompilerServices;
 
 namespace QuickProxyNet;
 
@@ -57,6 +59,7 @@ internal sealed class WebSocketStream : Stream
     public override void Flush() => _inner.Flush();
     public override Task FlushAsync(CancellationToken cancellationToken) => _inner.FlushAsync(cancellationToken);
 
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public override async ValueTask<int> ReadAsync(
         Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
@@ -99,6 +102,7 @@ internal sealed class WebSocketStream : Stream
         }
     }
 
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public override async ValueTask WriteAsync(
         ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
     {
@@ -138,7 +142,7 @@ internal sealed class WebSocketStream : Stream
     // renter reads. These take the same route but clear the array on the way back.
     public override int Read(Span<byte> buffer)
     {
-        byte[] rented = System.Buffers.ArrayPool<byte>.Shared.Rent(buffer.Length);
+        byte[] rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
         try
         {
             int read = Read(rented, 0, buffer.Length);
@@ -147,13 +151,13 @@ internal sealed class WebSocketStream : Stream
         }
         finally
         {
-            System.Buffers.ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+            ArrayPool<byte>.Shared.Return(rented, clearArray: true);
         }
     }
 
     public override void Write(ReadOnlySpan<byte> buffer)
     {
-        byte[] rented = System.Buffers.ArrayPool<byte>.Shared.Rent(buffer.Length);
+        byte[] rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
         try
         {
             buffer.CopyTo(rented);
@@ -161,7 +165,7 @@ internal sealed class WebSocketStream : Stream
         }
         finally
         {
-            System.Buffers.ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+            ArrayPool<byte>.Shared.Return(rented, clearArray: true);
         }
     }
 

@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 
 namespace QuickProxyNet;
@@ -131,6 +132,7 @@ internal sealed class VisionStream : Stream
     // ================================ reading ================================
 
     /// <inheritdoc/>
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public override async ValueTask<int> ReadAsync(
         Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
@@ -171,7 +173,7 @@ internal sealed class VisionStream : Stream
                     continue;
                 }
 
-                await FillAsync(HeaderSize, throwOnEof: false, cancellationToken).ConfigureAwait(false);
+                await FillAsync(HeaderSize, cancellationToken).ConfigureAwait(false);
                 if (Buffered == 0)
                     return 0; // a clean close on a frame boundary is the end of the stream
 
@@ -239,7 +241,7 @@ internal sealed class VisionStream : Stream
                     continue;
                 }
 
-                Fill(HeaderSize, throwOnEof: false);
+                Fill(HeaderSize);
                 if (Buffered == 0)
                     return 0;
 
@@ -322,44 +324,30 @@ internal sealed class VisionStream : Stream
         return taken;
     }
 
-    /// <summary>Buffers at least <paramref name="count"/> bytes, compacting first if needed.</summary>
-    private async ValueTask FillAsync(int count, bool throwOnEof, CancellationToken cancellationToken)
+    /// <summary>
+    /// Buffers at least <paramref name="count"/> bytes, compacting first if needed. Stops short only
+    /// at end of stream, which the caller tells apart by what is <see cref="Buffered"/>.
+    /// </summary>
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+    private async ValueTask FillAsync(int count, CancellationToken cancellationToken)
     {
         Compact(count);
+        if (Buffered >= count)
+            return;
 
-        while (Buffered < count)
-        {
-            int read = await _inner.ReadAsync(_buffer.AsMemory(_end, _buffer.Length - _end), cancellationToken)
-                .ConfigureAwait(false);
-            if (read == 0)
-            {
-                if (throwOnEof)
-                    throw new EndOfStreamException("The VLESS server closed the connection inside an xtls-rprx-vision frame header, mid-response.");
-                return;
-            }
-
-            _end += read;
-        }
+        int read = await _inner.ReadAtLeastAsync(
+            _buffer.AsMemory(_end), count - Buffered, throwOnEndOfStream: false, cancellationToken).ConfigureAwait(false);
+        _end += read;
     }
 
-    private void Fill(int count, bool throwOnEof)
+    private void Fill(int count)
     {
         Compact(count);
-
-        while (Buffered < count)
-        {
-            int read = _inner.Read(_buffer.AsSpan(_end));
-            if (read == 0)
-            {
-                if (throwOnEof)
-                    throw new EndOfStreamException("The VLESS server closed the connection inside an xtls-rprx-vision frame header, mid-response.");
-                return;
-            }
-
-            _end += read;
-        }
+        if (Buffered < count)
+            _end += _inner.ReadAtLeast(_buffer.AsSpan(_end), count - Buffered, throwOnEndOfStream: false);
     }
 
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     private async ValueTask<int> FillSomeAsync(CancellationToken cancellationToken)
     {
         Compact(1);
@@ -399,6 +387,7 @@ internal sealed class VisionStream : Stream
     // ================================ writing ================================
 
     /// <inheritdoc/>
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public override async ValueTask WriteAsync(
         ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
     {
