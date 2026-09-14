@@ -340,6 +340,27 @@ public class VmessClientTest
         Assert.Null(o.Remark);
     }
 
+    // Telegram-style "@channel" tags are common in remarks. An '@' selects the URI grammar only
+    // before the fragment; after it, it is part of the name, and it used to reject the link.
+    [Theory]
+    [InlineData("#@channel", "@channel")]
+    [InlineData("#Node @ Telegram", "Node @ Telegram")]
+    [InlineData("#Node%20%40%20Telegram", "Node @ Telegram")]
+    public void TryParse_AtSignInFragmentAfterBase64_IsPartOfTheRemark(string fragment, string remark)
+    {
+        Assert.True(VmessShareLink.TryParse(Link(MinimalJson()) + fragment, out var o));
+        Assert.Equal(ProxyHost, o.Host);
+        Assert.Equal(remark, o.Remark);
+    }
+
+    [Fact]
+    public void TryParse_EmptyJsonPs_FallsBackToTheFragment()
+    {
+        string json = MinimalJson(extra: ",\"ps\":\"\"");
+        Assert.True(VmessShareLink.TryParse(Link(json) + "#from fragment", out var o));
+        Assert.Equal("from fragment", o.Remark);
+    }
+
     // ===================== grammar 2: the standard URI form =====================
     //
     // vmess://{uuid}@{host}:{port}?{query}#{remark} — 48 links in the corpus. The query

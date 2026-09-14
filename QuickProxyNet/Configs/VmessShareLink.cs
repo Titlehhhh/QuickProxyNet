@@ -28,8 +28,9 @@ namespace QuickProxyNet;
 /// </description></item>
 /// </list>
 /// <para>
-/// A payload containing <c>@</c> selects the second grammar; that character occurs in
-/// neither base64 alphabet, so the choice is unambiguous.
+/// A payload containing <c>@</c> before any <c>#</c> selects the second grammar; that
+/// character occurs in neither base64 alphabet, so the choice is unambiguous. After the
+/// <c>#</c> it is part of the remark.
 /// </para>
 /// <para>
 /// Recognized JSON fields: <c>add</c>, <c>port</c>, <c>id</c>, <c>aid</c>/<c>alterId</c>,
@@ -98,16 +99,17 @@ public static class VmessShareLink
             return false;
         }
 
-        // Two grammars exist in the wild. Neither base64 alphabet contains '@', so its
-        // presence unambiguously means the standard URI form.
-        if (payload.IndexOf('@') >= 0)
+        // Two grammars exist in the wild. Neither base64 alphabet contains '@', so its presence
+        // before any '#fragment' unambiguously means the standard URI form. Only before it: a
+        // remark after the base64 is free text, and "@channel" tags there are common.
+        int hash = payload.IndexOf('#');
+        if ((hash >= 0 ? payload[..hash] : payload).IndexOf('@') >= 0)
             return TryParseStandardUri(link.ToString(), out options, out error);
 
         // v2rayN base64-JSON. Producers routinely append the remark as a '#fragment'
         // *after* the base64, which then fails to decode. '#' is not in either alphabet
         // either, so everything from it onwards is the remark, not payload.
         string? fragmentRemark = null;
-        int hash = payload.IndexOf('#');
         if (hash >= 0)
         {
             ReadOnlySpan<char> fragment = payload[(hash + 1)..];
@@ -607,6 +609,13 @@ public static class VmessShareLink
             if (string.IsNullOrEmpty(sni))
                 sni = host;
 
+            // 'ps' is authoritative; the '#fragment' form is the fallback for producers that
+            // append the remark after the base64 instead of putting it in the JSON. An empty 'ps'
+            // counts as absent: those same producers write "ps":"" and put the name in the fragment.
+            string? remark = GetString(psField);
+            if (string.IsNullOrEmpty(remark) && fragmentRemark is not null)
+                remark = fragmentRemark;
+
             options = new VmessOptions
             {
                 Id = id,
@@ -621,9 +630,7 @@ public static class VmessShareLink
                 Path = GetString(pathField),
                 HostHeader = GetString(hostField),
                 AllowInsecure = GetBoolean(allowInsecureField) || GetBoolean(skipCertVerifyField),
-                // 'ps' is authoritative; the '#fragment' form is the fallback for producers
-                // that append the remark after the base64 instead of putting it in the JSON.
-                Remark = GetString(psField) ?? fragmentRemark
+                Remark = remark
             };
             error = null;
             return true;
