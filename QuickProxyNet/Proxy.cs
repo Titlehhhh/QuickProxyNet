@@ -161,6 +161,13 @@ public static class Proxy
                 throw new FormatException(
                     $"The {scheme} proxy link is not a well-formed URI (expected '{scheme}://[user:password@]host:port').");
 
+            // Uri takes an empty authority for a scheme it has no rules of its own for, so "socks5://"
+            // parsed, reached the client constructor as an empty host and left as an ArgumentException,
+            // while "http://" was already refused here.
+            if (uri.Host.Length == 0)
+                throw new FormatException(
+                    $"The {scheme} proxy link has no host (expected '{scheme}://[user:password@]host:port').");
+
             return Tag(Create(uri), trimmed);
         }
 

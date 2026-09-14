@@ -351,8 +351,14 @@ public class ProxyFactoryTest
     [Fact]
     public void Create_MalformedKnownScheme_ThrowsFormat()
     {
-        Assert.ThrowsAny<Exception>(() => Create("socks5://"));
-        Assert.ThrowsAny<FormatException>(() => Create("vless://not-a-valid-link"));
+        // Uri takes an empty authority for the socks schemes, which it has no rules for, so these reached
+        // the client constructor as an empty host and left as an ArgumentException. "http://" was
+        // already a FormatException, and the same link must not change type with its scheme.
+        Assert.Throws<FormatException>(() => Create("socks4://"));
+        Assert.Throws<FormatException>(() => Create("socks4a://"));
+        Assert.Throws<FormatException>(() => Create("socks5://"));
+        Assert.Throws<FormatException>(() => Create("http://"));
+        Assert.Throws<FormatException>(() => Create("vless://not-a-valid-link"));
     }
 
     // === Proxy.ConnectAsync(string, ...) ===
