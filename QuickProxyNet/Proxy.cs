@@ -458,13 +458,16 @@ public static class Proxy
         if (string.IsNullOrEmpty(proxyUri.UserInfo))
             return null;
 
+        // Uri.UserInfo is still percent-encoded. A ':', '@' or '/' in a password can only be
+        // written into a link escaped, so passing the escaped text on failed authentication for
+        // exactly those passwords. Split first, so an escaped ':' stays inside its half.
         var sep = proxyUri.UserInfo.IndexOf(':');
         if (sep < 0)
-            return new NetworkCredential(proxyUri.UserInfo, string.Empty);
+            return new NetworkCredential(Uri.UnescapeDataString(proxyUri.UserInfo), string.Empty);
 
         return new NetworkCredential(
-            proxyUri.UserInfo.Substring(0, sep),
-            proxyUri.UserInfo.Substring(sep + 1));
+            Uri.UnescapeDataString(proxyUri.UserInfo.Substring(0, sep)),
+            Uri.UnescapeDataString(proxyUri.UserInfo.Substring(sep + 1)));
     }
 }
 

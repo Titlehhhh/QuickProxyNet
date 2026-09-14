@@ -60,7 +60,10 @@ public abstract class ProxyClient : IProxyClient
         ProxyHost = host;
         ProxyPort = port == 0 ? 1080 : port;
 
-        ProxyUri = new Uri($"{protocol}://{credentials.UserName}:{credentials.Password}@{FormatUriHost(host)}:{port}");
+        // Escaped: unescaped, a password with '@', '#', '/' or '?' made this constructor throw
+        // UriFormatException, and one with ':' split in the wrong place when read back.
+        ProxyUri = new Uri(
+            $"{protocol}://{Uri.EscapeDataString(credentials.UserName)}:{Uri.EscapeDataString(credentials.Password)}@{FormatUriHost(host)}:{port}");
         ProxyCredentials = credentials;
     }
 

@@ -88,6 +88,35 @@ public class ProxyFactoryTest
         Assert.Equal("pass", client.ProxyCredentials?.Password);
     }
 
+    // A ':', '@' or '/' in a password can only be written into a link escaped. The escaped text
+    // used to go to the proxy as the password, so exactly those passwords failed to authenticate.
+    [Theory]
+    [InlineData("socks5://us%40er:p%3Ass@127.0.0.1:1080", "us@er", "p:ss")]
+    [InlineData("http://user:p%40ss%2Fw%23rd@127.0.0.1:8080", "user", "p@ss/w#rd")]
+    [InlineData("socks5://user:100%25@127.0.0.1:1080", "user", "100%")]
+    public void Create_ClassicScheme_DecodesEscapedCredentials(string link, string user, string password)
+    {
+        var client = Create(link);
+
+        Assert.Equal(user, client.ProxyCredentials?.UserName);
+        Assert.Equal(password, client.ProxyCredentials?.Password);
+    }
+
+    // These used to throw UriFormatException from the client constructor, which composed the
+    // credentials into ProxyUri unescaped.
+    [Theory]
+    [InlineData("p@ss")]
+    [InlineData("p#ss")]
+    [InlineData("p/ss")]
+    [InlineData("p?ss")]
+    [InlineData("p:ss")]
+    public void Create_ExplicitCredentials_WithUriReservedCharacters_AreKept(string password)
+    {
+        var client = Proxy.Create(ProxyType.Socks5, "127.0.0.1", 1080, new NetworkCredential("user", password));
+
+        Assert.Equal(password, client.ProxyCredentials?.Password);
+    }
+
     [Fact]
     public void Create_IsCaseInsensitiveAndIgnoresSurroundingWhitespace()
     {
