@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Text;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -216,6 +217,8 @@ internal static class HttpUpgradeHandshake
 
         Write(buffer, ref pos, "\r\n"u8);
 
+        // size is a worst case, and the pool's rounding would hide a formula that fell short of it.
+        Debug.Assert(pos <= size);
         return (buffer, pos, expectedAccept);
 
         static void Write(byte[] buffer, ref int pos, ReadOnlySpan<byte> value)

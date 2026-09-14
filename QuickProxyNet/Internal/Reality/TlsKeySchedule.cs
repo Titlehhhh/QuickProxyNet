@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -46,6 +47,10 @@ internal static class TlsKeySchedule
             throw new ArgumentException(
                 $"TLS 1.3 never expands past one hash length ({hashLength} bytes); {output.Length} were asked for.",
                 nameof(output));
+
+        // Every secret the schedule expands is one hash long. HMAC takes a key of any length, so a
+        // wrongly sliced one would derive wrong keys silently, and the symptom would look like the peer's.
+        Debug.Assert(secret.Length == hashLength);
 
         // HkdfLabel = uint16 length || opaque label<7..255> || opaque context<0..255>, followed
         // here by the one-byte block counter HKDF-Expand appends.

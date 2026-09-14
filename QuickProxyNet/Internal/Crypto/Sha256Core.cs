@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -83,6 +84,7 @@ internal static class Sha256Core
     internal static void ComputeHash(
         ReadOnlySpan<uint> iv, ReadOnlySpan<byte> data, Span<byte> destination, int outputBytes, bool vectorize)
     {
+        Debug.Assert(iv.Length == StateWords);
         Span<uint> state = stackalloc uint[StateWords];
         iv.CopyTo(state);
 
@@ -98,6 +100,10 @@ internal static class Sha256Core
     /// </summary>
     internal static void Absorb(Span<uint> state, ReadOnlySpan<byte> blocks, Span<uint> schedule, bool vectorize)
     {
+        // A remainder would be dropped, and the caller would have hashed a different message. The
+        // schedule is expanded through Unsafe.Add, so a short one is written past its end unchecked.
+        Debug.Assert(blocks.Length % BlockSize == 0 && state.Length == StateWords && schedule.Length >= ScheduleWords);
+
         while (blocks.Length >= BlockSize)
         {
             ProcessBlock(blocks, state, schedule, vectorize);
@@ -114,6 +120,8 @@ internal static class Sha256Core
     internal static void Finish(
         Span<uint> state, ReadOnlySpan<byte> tail, ulong totalBytes, Span<uint> schedule, bool vectorize)
     {
+        Debug.Assert(state.Length == StateWords && schedule.Length >= ScheduleWords); // see Absorb
+
         while (tail.Length >= BlockSize)
         {
             ProcessBlock(tail, state, schedule, vectorize);
@@ -144,6 +152,9 @@ internal static class Sha256Core
     /// </summary>
     internal static void WriteDigest(ReadOnlySpan<uint> state, Span<byte> destination, int outputBytes)
     {
+        // A partial word would be dropped. Sha224 and Sha256 check the destination before calling.
+        Debug.Assert(outputBytes % 4 == 0 && outputBytes <= DigestSize && destination.Length >= outputBytes);
+
         for (int i = 0; i < outputBytes / 4; i++)
             BinaryPrimitives.WriteUInt32BigEndian(destination.Slice(i * 4), state[i]);
     }

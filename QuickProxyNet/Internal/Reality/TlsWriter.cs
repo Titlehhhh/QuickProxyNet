@@ -14,6 +14,11 @@ internal sealed class TlsWriter(int capacity = 512)
     private byte[] _buffer = new byte[capacity];
     private int _position;
 
+#if DEBUG
+    /// <summary>The vectors begun and not yet ended, innermost last, with their prefix sizes.</summary>
+    private readonly Stack<(int Marker, int PrefixSize)> _openVectors = new();
+#endif
+
     /// <summary>Number of bytes written so far.</summary>
     public int Length => _position;
 
@@ -52,14 +57,14 @@ internal sealed class TlsWriter(int capacity = 512)
     public int BeginVector8()
     {
         WriteByte(0);
-        return _position;
+        return Opened(1);
     }
 
     /// <summary>Reserves a two-byte length prefix; pass the result to <see cref="EndVector"/>.</summary>
     public int BeginVector16()
     {
         WriteUInt16(0);
-        return _position;
+        return Opened(2);
     }
 
     /// <summary>Reserves a three-byte length prefix; pass the result to <see cref="EndVector"/>.</summary>
@@ -67,6 +72,15 @@ internal sealed class TlsWriter(int capacity = 512)
     {
         WriteByte(0);
         WriteUInt16(0);
+        return Opened(3);
+    }
+
+    /// <summary>The marker for the vector whose length prefix was just reserved.</summary>
+    private int Opened(int prefixSize)
+    {
+#if DEBUG
+        _openVectors.Push((_position, prefixSize));
+#endif
         return _position;
     }
 
@@ -75,6 +89,16 @@ internal sealed class TlsWriter(int capacity = 512)
     /// <param name="prefixSize">1, 2 or 3 — must match the <c>BeginVector*</c> that was used.</param>
     public void EndVector(int marker, int prefixSize)
     {
+#if DEBUG
+        // Vectors nest, so the one ending must be the innermost still open, with the prefix size it
+        // began with. A second EndVector for one marker, a mismatched size or an out-of-order end would
+        // patch a length over the wrong bytes, and the peer would only see a malformed hello. Checking
+        // that the prefix still reads zero catches few of these: a size one short lands on a zero byte
+        // of the same placeholder, and an empty vector's length is zero either way.
+        bool anyOpen = _openVectors.TryPop(out (int Marker, int PrefixSize) innermost);
+        System.Diagnostics.Debug.Assert(anyOpen && innermost == (marker, prefixSize));
+#endif
+
         int length = _position - marker;
         int start = marker - prefixSize;
 
@@ -107,7 +131,14 @@ internal sealed class TlsWriter(int capacity = 512)
     }
 
     /// <summary>Copies the written bytes into a new array.</summary>
-    public byte[] ToArray() => _buffer.AsSpan(0, _position).ToArray();
+    public byte[] ToArray()
+    {
+#if DEBUG
+        // A vector never ended still carries a zero length.
+        System.Diagnostics.Debug.Assert(_openVectors.Count == 0);
+#endif
+        return _buffer.AsSpan(0, _position).ToArray();
+    }
 
     private void Ensure(int additional)
     {

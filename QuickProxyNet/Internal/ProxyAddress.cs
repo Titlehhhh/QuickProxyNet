@@ -25,6 +25,11 @@ internal static class ProxyAddress
     public static int WriteTypeAndAddress(
         string host, Span<byte> dest, byte ipv4Type, byte domainType, byte ipv6Type)
     {
+        // Every caller passes room for the longest address: VlessHelper, TrojanHelper and
+        // ShadowsocksClient rent it, and VmessRequest checks its destination first. An IPv4 host needs
+        // five bytes, so a buffer sized for the host in hand would work until a long name came along.
+        Debug.Assert(dest.Length >= MaxLength);
+
         if (IPAddress.TryParse(host, out var ip))
         {
             if (ip.AddressFamily == AddressFamily.InterNetwork)

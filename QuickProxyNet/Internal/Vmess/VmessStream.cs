@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 
@@ -290,6 +291,10 @@ internal sealed class VmessStream : Stream
     private void OpenChunk(int sealedLength, Memory<byte> plaintext)
     {
         int plaintextLength = sealedLength - TagSize;
+
+        // A plaintext of any other length makes the AEAD throw ArgumentException, which the
+        // CryptographicException translation below would let straight out of ReadAsync.
+        Debug.Assert(plaintext.Length == plaintextLength);
         try
         {
             _reader.Open(
@@ -375,6 +380,9 @@ internal sealed class VmessStream : Stream
     // Frames and seals one chunk into _sendBuffer; returns the number of wire bytes.
     private int SealChunk(ReadOnlySpan<byte> plaintext)
     {
+        // WriteAsync cuts every write to this, which is what the send buffer holds with the length
+        // prefix and the tag.
+        Debug.Assert(plaintext.Length <= MaxSendPlaintextSize);
         byte[] buffer = _sendBuffer ??= ArrayPool<byte>.Shared.Rent(SendBufferSize);
 
         int sealedLength = plaintext.Length + TagSize;

@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace QuickProxyNet;
@@ -105,6 +106,9 @@ internal sealed class RealityTlsStream : Stream
     /// <summary>Copies out of the record in hand and advances past what was taken.</summary>
     private int TakePending(Span<byte> buffer)
     {
+        // Every caller has a record in hand and room for some of it. A 0 from here would read as end
+        // of stream.
+        Debug.Assert(buffer.Length > 0 && !_pending.IsEmpty);
         int count = Math.Min(buffer.Length, _pending.Length);
         _pending.Span[..count].CopyTo(buffer);
         _pending = _pending[count..];

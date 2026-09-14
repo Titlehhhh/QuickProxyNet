@@ -265,6 +265,9 @@ internal static class SocksHelper
                 totalLength += hostLength + 1;
             }
 
+            // BufferSize is the largest SOCKS4a request, and ArrayPool's rounding would hide a request
+            // that outgrew it.
+            Debug.Assert(totalLength <= BufferSize);
             await stream.WriteAsync(buffer.AsMemory(0, totalLength), cancellationToken).ConfigureAwait(false);
 
             // +----+----+----+----+----+----+----+----+

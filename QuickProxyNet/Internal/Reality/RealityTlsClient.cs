@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Formats.Asn1;
 using System.Security.Cryptography;
 
@@ -84,8 +85,11 @@ internal sealed class RealityTlsClient
     /// </remarks>
     private readonly struct HandshakeSecrets(byte[] buffer, int hashLength)
     {
+        /// <summary>The secrets after the shared one, each a hash long.</summary>
+        private const int SecretCount = 6;
+
         public static HandshakeSecrets Rent(int hashLength) =>
-            new(ArrayPool<byte>.Shared.Rent(X25519.KeySize + (6 * hashLength)), hashLength);
+            new(ArrayPool<byte>.Shared.Rent(X25519.KeySize + (SecretCount * hashLength)), hashLength);
 
         /// <summary>The raw X25519 shared secret, before the key schedule touches it.</summary>
         public Span<byte> Shared => buffer.AsSpan(0, X25519.KeySize);
@@ -97,8 +101,13 @@ internal sealed class RealityTlsClient
         public Span<byte> ClientApplicationTraffic => At(4);
         public Span<byte> ServerApplicationTraffic => At(5);
 
-        private Span<byte> At(int index) =>
-            buffer.AsSpan(X25519.KeySize + (index * hashLength), hashLength);
+        private Span<byte> At(int index)
+        {
+            // The pool hands out more than was asked for, so a seventh secret would not fail the slice.
+            // It would land in the slack, outside what Rent sized for.
+            Debug.Assert((uint)index < SecretCount);
+            return buffer.AsSpan(X25519.KeySize + (index * hashLength), hashLength);
+        }
 
         /// <summary>Clears every secret and returns the buffer to the pool.</summary>
         public void Return() => ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
@@ -191,6 +200,9 @@ internal sealed class RealityTlsClient
                     secrets.HandshakeSecret, secrets.ClientHandshakeTraffic,
                     secrets.ServerHandshakeTraffic, secrets.MasterSecret);
 
+                // The first read keys, so there is nothing to replace; a protection replaced here would
+                // be left undisposed.
+                Debug.Assert(records.Read is null);
                 records.Read = new TlsRecordProtection(parsed.Suite, secrets.ServerHandshakeTraffic);
 
                 // ---- Server flight ----
@@ -270,6 +282,8 @@ internal sealed class RealityTlsClient
                 await records.WriteAsync(TlsContentType.ChangeCipherSpec, ChangeCipherSpecPayload, cancellationToken)
                     .ConfigureAwait(false);
 
+                // The first write keys: the ClientHello and the ChangeCipherSpec went in the clear.
+                Debug.Assert(records.Write is null);
                 records.Write = new TlsRecordProtection(parsed.Suite, secrets.ClientHandshakeTraffic);
 
                 byte[] finished = BuildFinished(

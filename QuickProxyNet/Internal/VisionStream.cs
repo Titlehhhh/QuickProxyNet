@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 
@@ -187,9 +188,13 @@ internal sealed class VisionStream : Stream
             if (Buffered == 0 && await FillSomeAsync(cancellationToken).ConfigureAwait(false) == 0)
                 throw new EndOfStreamException("The VLESS server closed the connection inside an xtls-rprx-vision frame, mid-response.");
 
+            // Past the checks above, content or padding remains, something is buffered and the caller's
+            // buffer is not empty. A step of zero would return 0 as though the stream had ended, or go
+            // round this loop without reading.
             if (_remainingContent > 0)
             {
                 int taken = Math.Min(Math.Min(_remainingContent, Buffered), buffer.Length);
+                Debug.Assert(taken > 0);
                 _buffer.AsSpan(_start, taken).CopyTo(buffer.Span);
                 _start += taken;
                 _remainingContent -= taken;
@@ -197,6 +202,7 @@ internal sealed class VisionStream : Stream
             }
 
             int skipped = Math.Min(_remainingPadding, Buffered);
+            Debug.Assert(skipped > 0);
             _start += skipped;
             _remainingPadding -= skipped;
         }
@@ -258,6 +264,7 @@ internal sealed class VisionStream : Stream
             if (_remainingContent > 0)
             {
                 int taken = Math.Min(Math.Min(_remainingContent, Buffered), buffer.Length);
+                Debug.Assert(taken > 0);
                 _buffer.AsSpan(_start, taken).CopyTo(buffer);
                 _start += taken;
                 _remainingContent -= taken;
@@ -265,6 +272,7 @@ internal sealed class VisionStream : Stream
             }
 
             int skipped = Math.Min(_remainingPadding, Buffered);
+            Debug.Assert(skipped > 0);
             _start += skipped;
             _remainingPadding -= skipped;
         }
@@ -303,6 +311,9 @@ internal sealed class VisionStream : Stream
 
     private void ReadFrameHeader()
     {
+        // Both callers refuse fewer bytes first. The buffer is larger than what it holds, so a short
+        // header would be read out of stale bytes rather than fail.
+        Debug.Assert(Buffered >= HeaderSize);
         ReadOnlySpan<byte> header = _buffer.AsSpan(_start, HeaderSize);
         _command = header[0];
         _remainingContent = BinaryPrimitives.ReadUInt16BigEndian(header[1..]);
@@ -351,6 +362,11 @@ internal sealed class VisionStream : Stream
     private async ValueTask<int> FillSomeAsync(CancellationToken cancellationToken)
     {
         Compact(1);
+
+        // Callers hold fewer bytes than a UUID and a frame header, or none. A zero-length read would
+        // return 0, which in Undecided mode switches the stream to Raw and hands the UUID and the
+        // padding to the caller as payload.
+        Debug.Assert(_end < _buffer.Length);
         int read = await _inner.ReadAsync(_buffer.AsMemory(_end, _buffer.Length - _end), cancellationToken)
             .ConfigureAwait(false);
         _end += read;
@@ -360,6 +376,7 @@ internal sealed class VisionStream : Stream
     private int FillSome()
     {
         Compact(1);
+        Debug.Assert(_end < _buffer.Length); // see FillSomeAsync
         int read = _inner.Read(_buffer.AsSpan(_end));
         _end += read;
         return read;
@@ -463,6 +480,7 @@ internal sealed class VisionStream : Stream
 
         int padding = PaddingLength(content.Length);
         length = overhead + content.Length + padding;
+        Debug.Assert(padding >= 0 && length <= MaxFrame);
 
         frame = ArrayPool<byte>.Shared.Rent(length);
         Span<byte> span = frame.AsSpan(0, length);

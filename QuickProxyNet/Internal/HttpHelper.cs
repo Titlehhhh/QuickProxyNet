@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Text;
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 
@@ -82,6 +83,8 @@ internal static class HttpHelper
         // End of headers
         S_crlf.CopyTo(buf.AsSpan(pos)); pos += 2;
 
+        // size is a worst case, and the pool's rounding would hide a formula that fell short of it.
+        Debug.Assert(pos <= size);
         return (buf, pos);
     }
 

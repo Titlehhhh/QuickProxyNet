@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 
@@ -377,6 +378,7 @@ internal sealed class ShadowsocksStream : Stream
             _start = 0;
         }
 
+        Debug.Assert(buffer.Length - _end >= missing);
         return buffer.AsMemory(_end);
     }
 
@@ -581,6 +583,9 @@ internal sealed class ShadowsocksStream : Stream
         }
         while (consumed < payload.Length);
 
+        // The buffer holds the salt and one full chunk, so the first chunk always fits. A run that took
+        // nothing from a non-empty payload would have the write loops go round on it forever.
+        Debug.Assert(consumed > 0 || payload.IsEmpty);
         return offset;
     }
 
