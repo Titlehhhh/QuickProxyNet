@@ -5,15 +5,13 @@ namespace QuickProxyNet.Tests;
 
 public class HttpHelperTest
 {
-    private static readonly Uri ProxyUri = new("http://proxy.example.com:8080");
-
     [Fact]
     public async Task EstablishTunnel_200_ReturnsStream()
     {
         var response = Encoding.UTF8.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n");
         var stream = new FakeProxyStream(response);
 
-        var result = await HttpHelper.EstablishHttpTunnelAsync(stream, ProxyUri, "example.com", 443, null,
+        var result = await HttpHelper.EstablishHttpTunnelAsync(stream,"example.com", 443, null,
             CancellationToken.None);
 
         // Should return the same stream (no overread)
@@ -27,7 +25,7 @@ public class HttpHelperTest
         var response = Encoding.UTF8.GetBytes("HTTP/1.1 200 Connection established\r\n\r\nHELLO");
         var stream = new FakeProxyStream(response);
 
-        var result = await HttpHelper.EstablishHttpTunnelAsync(stream, ProxyUri, "example.com", 443, null,
+        var result = await HttpHelper.EstablishHttpTunnelAsync(stream,"example.com", 443, null,
             CancellationToken.None);
 
         // Should NOT be the same stream — it's a PrefixedStream wrapping the overread bytes
@@ -48,7 +46,7 @@ public class HttpHelperTest
         var stream = new FakeProxyStream(response);
 
         var ex = await Assert.ThrowsAsync<ProxyProtocolException>(
-            () => HttpHelper.EstablishHttpTunnelAsync(stream, ProxyUri, "example.com", 443, null,
+            () => HttpHelper.EstablishHttpTunnelAsync(stream,"example.com", 443, null,
                 CancellationToken.None).AsTask());
 
         Assert.Equal(ProxyErrorCode.AuthRequired, ex.ErrorCode);
@@ -61,7 +59,7 @@ public class HttpHelperTest
         var stream = new FakeProxyStream(response);
 
         var ex = await Assert.ThrowsAsync<ProxyProtocolException>(
-            () => HttpHelper.EstablishHttpTunnelAsync(stream, ProxyUri, "example.com", 443, null,
+            () => HttpHelper.EstablishHttpTunnelAsync(stream,"example.com", 443, null,
                 CancellationToken.None).AsTask());
 
         Assert.Equal(ProxyErrorCode.ConnectionFailed, ex.ErrorCode);
@@ -73,7 +71,7 @@ public class HttpHelperTest
         var response = Encoding.UTF8.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n");
         var stream = new FakeProxyStream(response);
 
-        await HttpHelper.EstablishHttpTunnelAsync(stream, ProxyUri, "target.com", 8080, null,
+        await HttpHelper.EstablishHttpTunnelAsync(stream,"target.com", 8080, null,
             CancellationToken.None);
 
         var sent = Encoding.UTF8.GetString(stream.WrittenBytes);
@@ -95,7 +93,7 @@ public class HttpHelperTest
         var response = Encoding.UTF8.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n");
         var stream = new FakeProxyStream(response);
 
-        await HttpHelper.EstablishHttpTunnelAsync(stream, ProxyUri, host, 443, null,
+        await HttpHelper.EstablishHttpTunnelAsync(stream,host, 443, null,
             CancellationToken.None);
 
         var sent = Encoding.UTF8.GetString(stream.WrittenBytes);
@@ -109,7 +107,7 @@ public class HttpHelperTest
         var stream = new FakeProxyStream(response);
         var creds = new System.Net.NetworkCredential("user", "pass");
 
-        await HttpHelper.EstablishHttpTunnelAsync(stream, ProxyUri, "target.com", 443, creds,
+        await HttpHelper.EstablishHttpTunnelAsync(stream,"target.com", 443, creds,
             CancellationToken.None);
 
         var sent = Encoding.UTF8.GetString(stream.WrittenBytes);
@@ -128,7 +126,7 @@ public class HttpHelperTest
         var stream = new FakeProxyStream([]);
 
         var ex = await Assert.ThrowsAsync<ProxyProtocolException>(
-            () => HttpHelper.EstablishHttpTunnelAsync(stream, ProxyUri, "example.com", 443, null,
+            () => HttpHelper.EstablishHttpTunnelAsync(stream,"example.com", 443, null,
                 CancellationToken.None).AsTask());
         Assert.Equal(ProxyErrorCode.ConnectionFailed, ex.ErrorCode);
     }

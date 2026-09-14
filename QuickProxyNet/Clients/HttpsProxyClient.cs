@@ -67,7 +67,7 @@ public class HttpsProxyClient : ProxyClient
             throw;
         }
 
-        return await HttpHelper.EstablishHttpTunnelAsync(ssl, ProxyUri, host, port, ProxyCredentials,
+        return await HttpHelper.EstablishHttpTunnelAsync(ssl, host, port, ProxyCredentials,
             cancellationToken);
     }
 }

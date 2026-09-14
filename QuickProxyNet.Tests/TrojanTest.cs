@@ -161,7 +161,7 @@ public class TrojanTest
     [Fact]
     public void Client_IPv6Host_ConstructsWithoutThrowing()
     {
-        // The base ProxyClient ctor must bracket the IPv6 literal when composing ProxyUri.
+        // An IPv6 literal must pass through the base ProxyClient constructor and stay unbracketed.
         var client = new TrojanClient(TrojanShareLink.Parse("trojan://secret@[2001:db8::1]:443"));
         Assert.Equal("2001:db8::1", client.ProxyHost);
         Assert.Equal(443, client.ProxyPort);

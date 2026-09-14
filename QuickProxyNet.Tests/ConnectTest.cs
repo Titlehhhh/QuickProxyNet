@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 
 namespace QuickProxyNet.Tests;
@@ -19,8 +20,7 @@ public class ConnectTest
     [EnvFact("HTTP_PROXY_URI")]
     public async Task HttpProxy_ConnectAndSendRequest()
     {
-        var uri = new Uri(Env("HTTP_PROXY_URI"));
-        await using var stream = await Proxy.ConnectAsync(uri, TargetHost, TargetPort,
+        await using var stream = await Proxy.ConnectAsync(Env("HTTP_PROXY_URI"), TargetHost, TargetPort,
             TimeSpan.FromSeconds(10));
 
         // Send a minimal HTTP GET and verify we get a response
@@ -38,8 +38,7 @@ public class ConnectTest
     [EnvFact("SOCKS5_PROXY_URI")]
     public async Task Socks5Proxy_ConnectAndSendRequest()
     {
-        var uri = new Uri(Env("SOCKS5_PROXY_URI"));
-        await using var stream = await Proxy.ConnectAsync(uri, TargetHost, TargetPort,
+        await using var stream = await Proxy.ConnectAsync(Env("SOCKS5_PROXY_URI"), TargetHost, TargetPort,
             TimeSpan.FromSeconds(10));
 
         var request = Encoding.UTF8.GetBytes($"GET / HTTP/1.1\r\nHost: {TargetHost}\r\nConnection: close\r\n\r\n");
@@ -54,12 +53,12 @@ public class ConnectTest
     }
 
     [AnyEnvFact("HTTP_PROXY_URI", "SOCKS5_PROXY_URI")]
-    public async Task ExtensionMethod_ConnectThroughProxy()
+    public async Task Client_ConnectsToADnsEndPoint()
     {
         var proxyUrl = SkipGates.IsSet("HTTP_PROXY_URI") ? Env("HTTP_PROXY_URI") : Env("SOCKS5_PROXY_URI");
 
-        var uri = new Uri(proxyUrl);
-        await using var stream = await uri.ConnectThroughProxyAsync(TargetHost, TargetPort,
+        IProxyClient client = Proxy.Create(proxyUrl);
+        await using var stream = await client.ConnectAsync(new DnsEndPoint(TargetHost, TargetPort),
             TimeSpan.FromSeconds(10));
 
         var request = Encoding.UTF8.GetBytes($"GET / HTTP/1.1\r\nHost: {TargetHost}\r\nConnection: close\r\n\r\n");

@@ -6,24 +6,7 @@ namespace QuickProxyNet;
 
 public abstract class ProxyClient : IProxyClient
 {
-    private ProxyClient(Uri uri)
-    {
-        ProxyUri = uri;
-
-        ProxyHost = uri.Host;
-        ProxyPort = uri.Port;
-
-        if (!string.IsNullOrWhiteSpace(uri.UserInfo))
-        {
-            var sep = uri.UserInfo.IndexOf(':');
-            if (sep < 0)
-                throw new ArgumentException("Invalid credentials format.", nameof(uri.UserInfo));
-
-            ProxyCredentials = new NetworkCredential(
-                uri.UserInfo.Substring(0, sep),
-                uri.UserInfo.Substring(sep + 1));
-        }
-    }
+    private readonly string _scheme;
 
     protected ProxyClient(string protocol, string host, int port)
     {
@@ -37,45 +20,29 @@ public abstract class ProxyClient : IProxyClient
         if (port < 0 || port > 65535)
             throw new ArgumentOutOfRangeException(nameof(port));
 
-        ProxyHost = host;
+        _scheme = protocol;
+        // An IPv6 literal is kept unbracketed however it arrived: a Uri authority hands over
+        // "[::1]", a parsed share link "::1", and code comparing hosts should not see both.
+        ProxyHost = host.Length > 2 && host[0] == '[' && host[^1] == ']' ? host[1..^1] : host;
         ProxyPort = port == 0 ? 1080 : port;
-        ProxyUri = new Uri($"{protocol}://{FormatUriHost(host)}:{port}");
     }
 
     protected ProxyClient(string protocol, string host, int port, NetworkCredential credentials)
+        : this(protocol, host, port)
     {
-        if (host == null)
-            throw new ArgumentNullException(nameof(host));
-
-        if (host.Length == 0 || host.Length > 255)
-            throw new ArgumentException("The length of the host name must be between 0 and 256 characters.",
-                nameof(host));
-
-        if (port < 0 || port > 65535)
-            throw new ArgumentOutOfRangeException(nameof(port));
-
-        if (credentials == null)
-            throw new ArgumentNullException(nameof(credentials));
-
-        ProxyHost = host;
-        ProxyPort = port == 0 ? 1080 : port;
-
-        // Escaped: unescaped, a password with '@', '#', '/' or '?' made this constructor throw
-        // UriFormatException, and one with ':' split in the wrong place when read back.
-        ProxyUri = new Uri(
-            $"{protocol}://{Uri.EscapeDataString(credentials.UserName)}:{Uri.EscapeDataString(credentials.Password)}@{FormatUriHost(host)}:{port}");
-        ProxyCredentials = credentials;
+        ProxyCredentials = credentials ?? throw new ArgumentNullException(nameof(credentials));
     }
 
-    // An IPv6 literal must be bracketed in a URI ("[2001:db8::1]"), otherwise the Uri
-    // parser reads the address's colons as a port separator and throws. Host names and
-    // IPv4 literals never contain ':', so this only affects IPv6 endpoints.
-    // An IPv6 literal needs brackets inside a URI; one that already has them (a hand-built
-    // options object may carry "[::1]") must not get a second pair.
-    private static string FormatUriHost(string host) =>
-        host.Contains(':') && !host.StartsWith('[') ? $"[{host}]" : host;
-
-    public Uri ProxyUri { get; private set; }
+    /// <summary>
+    /// The proxy as <c>scheme://host:port</c>, for logs and diagnostics.
+    /// </summary>
+    /// <remarks>
+    /// Never carries credentials, and for the share-link families none of what it takes to
+    /// connect either: the uuid, sni and transport are in <see cref="SourceLink"/>.
+    /// </remarks>
+    public override string ToString() => ProxyHost.Contains(':')
+        ? $"{_scheme}://[{ProxyHost}]:{ProxyPort}"
+        : $"{_scheme}://{ProxyHost}:{ProxyPort}";
 
     /// <inheritdoc />
     /// <remarks>Set by the <see cref="Proxy"/> factory methods when a link was the input.</remarks>

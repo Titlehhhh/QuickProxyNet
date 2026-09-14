@@ -51,13 +51,6 @@ await using var stream = await Proxy.ConnectAsync(
     TimeSpan.FromSeconds(10));
 ```
 
-### Extension method on Uri
-
-```csharp
-var proxy = new Uri("http://proxy.example.com:8080");
-await using var stream = await proxy.ConnectThroughProxyAsync("example.com", 443);
-```
-
 ### Factory API (when you need to configure the client)
 
 ```csharp

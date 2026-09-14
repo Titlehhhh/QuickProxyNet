@@ -37,7 +37,11 @@ All public library types live in the `QuickProxyNet` namespace.
 - `Proxy` is the static entry point: one-call `ConnectAsync(...)` helpers, plus
   `Create(...)` / `TryCreate(...)` building a client from a share-link `string`,
   from a `Uri`, or from explicit proxy settings.
-- `ProxyUriExtensions` adds `Uri.ConnectThroughProxyAsync(...)`.
+- There are no `Uri` connect overloads and no `IProxyClient.ProxyUri` (removed in
+  5.0.0). A `Uri` cannot hold most `vmess://` links, keeps nothing but host and port
+  for the other VPN-style families, and could not even hold a password containing
+  `@`. `Proxy.Create(Uri)` stays as an adapter for `WebProxy.Address` and
+  `IWebProxy.GetProxy`; `ProxyClient.ToString()` is `scheme://host:port` for logs.
 - `IProxyClient` is the client contract; connection methods return
   `ValueTask<Stream>`. `SourceLink` carries the text the client was built from.
   A target is `host, port` or an `EndPoint` (`DnsEndPoint` / `IPEndPoint`); the

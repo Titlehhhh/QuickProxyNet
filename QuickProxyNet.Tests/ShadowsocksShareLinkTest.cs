@@ -467,7 +467,7 @@ public class ShadowsocksShareLinkTest
         Assert.Equal("2001:db8::1", client.ProxyHost);
         Assert.Equal(8388, client.ProxyPort);
         Assert.Equal(ProxyType.Shadowsocks, client.Type);
-        Assert.Equal("ss", client.ProxyUri.Scheme);
+        Assert.Equal("ss://[2001:db8::1]:8388", client.ToString());
     }
 
     [Fact]

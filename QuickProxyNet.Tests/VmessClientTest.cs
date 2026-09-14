@@ -688,7 +688,7 @@ public class VmessClientTest
         Assert.Equal(ProxyHost, client.ProxyHost);
         Assert.Equal(ProxyPort, client.ProxyPort);
         Assert.Same(options, client.Options);
-        Assert.Equal("vmess", client.ProxyUri.Scheme);
+        Assert.Equal($"vmess://{ProxyHost}:{ProxyPort}", client.ToString());
     }
 
     [Fact]

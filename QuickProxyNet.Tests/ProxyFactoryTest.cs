@@ -103,7 +103,7 @@ public class ProxyFactoryTest
     }
 
     // These used to throw UriFormatException from the client constructor, which composed the
-    // credentials into ProxyUri unescaped.
+    // credentials into a Uri unescaped.
     [Theory]
     [InlineData("p@ss")]
     [InlineData("p#ss")]
@@ -173,7 +173,7 @@ public class ProxyFactoryTest
         Assert.Equal("aes-256-gcm", client.Options.Method);
         Assert.Equal("password", client.Options.Password);
         Assert.Equal(link, client.SourceLink);
-        Assert.Equal("ss://example.com:8388/", client.ProxyUri.ToString());
+        Assert.Equal("ss://example.com:8388", client.ToString());
     }
 
     [Fact]
@@ -374,7 +374,7 @@ public class ProxyFactoryTest
         }
     }
 
-    // --- SourceLink: the text a client came from, which ProxyUri cannot reconstruct.
+    // --- SourceLink: the text a client came from, which ToString() cannot reconstruct.
 
     [Fact]
     public void SourceLink_FromShareLink_KeepsTheWholeLink()
@@ -385,10 +385,33 @@ public class ProxyFactoryTest
         IProxyClient client = Proxy.Create(link);
 
         Assert.Equal(link, client.SourceLink);
-        // And the reason SourceLink has to exist: ProxyUri has dropped everything that makes the
+        // And the reason SourceLink has to exist: nothing else on the client keeps what makes the
         // node reachable — the uuid, the sni, the transport.
-        Assert.Equal("vless://example.com:443/", client.ProxyUri.ToString());
-        Assert.DoesNotContain("cdn.example.com", client.ProxyUri.ToString());
+        Assert.Equal("vless://example.com:443", client.ToString());
+        Assert.DoesNotContain("cdn.example.com", client.ToString());
+    }
+
+    // --- ToString and ProxyHost, which took over from ProxyUri (removed in 5.0.0).
+
+    [Fact]
+    public void ToString_NamesTheProxy_WithoutCredentials()
+    {
+        IProxyClient client = Proxy.Create("socks5://user:secret@proxy.example:1080");
+
+        Assert.Equal("socks5://proxy.example:1080", client.ToString());
+    }
+
+    [Theory]
+    [InlineData("socks5://[::1]:1080")]
+    [InlineData("http://[2001:db8::1]:8080")]
+    [InlineData("trojan://pw@[2001:db8::1]:443")]
+    public void ProxyHost_IsUnbracketed_WhateverTheLinkFamily(string link)
+    {
+        // A Uri authority hands the host over as "[::1]", a share-link parser as "::1".
+        IProxyClient client = Proxy.Create(link);
+
+        Assert.DoesNotContain("[", client.ProxyHost);
+        Assert.Contains($"://[{client.ProxyHost}]:", client.ToString());
     }
 
     [Fact]

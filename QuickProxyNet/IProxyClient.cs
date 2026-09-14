@@ -9,15 +9,14 @@ namespace QuickProxyNet;
 /// </summary>
 public interface IProxyClient
 {
-    Uri ProxyUri { get; }
-
     /// <summary>
     /// The share link or URL this client was built from, or <see langword="null"/> when it was
     /// built from explicit settings.
     /// </summary>
     /// <remarks>
-    /// <see cref="ProxyUri"/> cannot stand in for this. For VLESS, Trojan and VMess it is only
-    /// <c>scheme://host:port</c> — a node written out that way has lost its uuid, sni, flow and
+    /// Nothing else on the client can stand in for this. For VLESS, Trojan, VMess and Shadowsocks,
+    /// <see cref="Type"/>, <see cref="ProxyHost"/> and <see cref="ProxyPort"/> only say where to
+    /// connect: a node written out as <c>scheme://host:port</c> has lost its uuid, sni, flow and
     /// transport, and cannot be connected to again. Code that checks a list of nodes and reports
     /// the ones that worked needs the text that came in, not a normalised summary of it.
     /// </remarks>
@@ -29,7 +28,8 @@ public interface IProxyClient
     NetworkCredential? ProxyCredentials { get; }
 
     /// <summary>
-    /// Gets the hostname or IP address of the proxy server.
+    /// Gets the hostname or IP address of the proxy server. An IPv6 address is given without
+    /// brackets.
     /// </summary>
     string ProxyHost { get; }
 
@@ -160,4 +160,4 @@ public interface IProxyClient
         var (host, port) = ProxyClient.SplitTarget(target);
         return await ConnectAsync(source, host, port, cancellationToken).ConfigureAwait(false);
     }
-}
+}

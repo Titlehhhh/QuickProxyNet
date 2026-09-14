@@ -96,8 +96,8 @@ internal static class HttpHelper
         return length + 2;
     }
 
-    internal static async ValueTask<Stream> EstablishHttpTunnelAsync(Stream stream, Uri proxyUri, string host,
-        int port, NetworkCredential? credentials, CancellationToken cancellationToken)
+    internal static async ValueTask<Stream> EstablishHttpTunnelAsync(Stream stream, string host, int port,
+        NetworkCredential? credentials, CancellationToken cancellationToken)
     {
         var (cmd, cmdLen) = BuildConnectionCommand(host, port, credentials);
         try

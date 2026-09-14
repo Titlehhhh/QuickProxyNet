@@ -37,12 +37,12 @@ public class DualStackConnectTest
     }
 
     [IPv6LoopbackFact]
-    public async Task UriFastPath_ReachesProxyOnIPv6()
+    public async Task Link_WithBracketedIPv6_ReachesProxyOnIPv6()
     {
         using var proxy = new LoopbackConnectProxy(IPAddress.IPv6Loopback);
 
         await using Stream stream = await Proxy.ConnectAsync(
-            new Uri($"http://[::1]:{proxy.Port}"), "example.com", 80, Deadline);
+            $"http://[::1]:{proxy.Port}", "example.com", 80, Deadline);
 
         Assert.StartsWith("CONNECT example.com:80 HTTP/1.1\r\n", await proxy.Request);
     }

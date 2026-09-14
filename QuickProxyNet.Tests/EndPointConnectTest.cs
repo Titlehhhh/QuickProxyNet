@@ -104,7 +104,6 @@ public class EndPointConnectTest
     {
         public (string Host, int Port, string Overload) Last { get; private set; }
 
-        public Uri ProxyUri { get; } = new("socks5://proxy.example:1080");
         public NetworkCredential? ProxyCredentials => null;
         public string ProxyHost => "proxy.example";
         public int ProxyPort => 1080;

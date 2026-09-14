@@ -1,19 +1,16 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
-using System.Net.Sockets;
-using System.Runtime.CompilerServices;
 
 namespace QuickProxyNet;
 
 /// <summary>
-/// Provides static convenience methods for connecting through a proxy in a single call.
-/// No intermediate <see cref="IProxyClient"/> is allocated — the socket and tunnel
-/// negotiation happen inline, making this ideal for mass proxy checking.
+/// The static entry point: connect through a proxy in one call, or build a client from a share
+/// link, a <see cref="Uri"/> or explicit settings.
 /// </summary>
 /// <example>
 /// <code>
 /// await using var stream = await Proxy.ConnectAsync(
-///     new Uri("socks5://user:pass@127.0.0.1:1080"),
+///     "socks5://user:pass@127.0.0.1:1080",
 ///     "example.com", 443);
 /// </code>
 /// </example>
@@ -31,11 +28,8 @@ public static class Proxy
     /// <param name="cancellationToken">A token to cancel the operation.</param>
     /// <returns>A connected <see cref="Stream"/> tunneled through the proxy.</returns>
     /// <remarks>
-    /// The <see cref="Uri"/> overloads below cover only the classic schemes, and deliberately so:
-    /// they skip the client object entirely, which is what makes them suitable for checking
-    /// proxies by the thousand. This one goes through <see cref="Create(string)"/> instead,
-    /// because VLESS, Trojan, VMess and Shadowsocks need the parsed configuration to negotiate at all. When
-    /// you have a link and no reason to care which family it belongs to, use this.
+    /// The link is parsed on every call. To connect through the same proxy repeatedly, build the
+    /// client once with <see cref="Create(string)"/> and reuse it.
     /// </remarks>
     public static async ValueTask<Stream> ConnectAsync(string proxyLink, string host, int port,
         CancellationToken cancellationToken = default)
@@ -99,63 +93,6 @@ public static class Proxy
     {
         IProxyClient client = Create(proxyLink);
         return await client.ConnectAsync(target, timeout, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Connects to a target host through the specified proxy.
-    /// Opens a socket, negotiates the tunnel, and returns the connected stream.
-    /// The caller owns the returned <see cref="Stream"/> and must dispose it.
-    /// </summary>
-    /// <param name="proxyUri">
-    /// Proxy URI including scheme, host, port, and optional credentials.
-    /// Supported schemes: http, https, socks4, socks4a, socks5.
-    /// </param>
-    /// <param name="host">The target host to connect to through the proxy.</param>
-    /// <param name="port">The target port.</param>
-    /// <param name="cancellationToken">A token to cancel the operation.</param>
-    /// <returns>A connected <see cref="Stream"/> tunneled through the proxy.</returns>
-    public static ValueTask<Stream> ConnectAsync(Uri proxyUri, string host, int port,
-        CancellationToken cancellationToken = default)
-    {
-        return ConnectCoreAsync(proxyUri, host, port, timeout: null, cancellationToken);
-    }
-
-    /// <summary>
-    /// Connects to a target host through the specified proxy with a timeout.
-    /// </summary>
-    /// <param name="proxyUri">
-    /// Proxy URI including scheme, host, port, and optional credentials.
-    /// Supported schemes: http, https, socks4, socks4a, socks5.
-    /// </param>
-    /// <param name="host">The target host to connect to through the proxy.</param>
-    /// <param name="port">The target port.</param>
-    /// <param name="timeout">Maximum time to wait for the connection to complete.</param>
-    /// <param name="cancellationToken">A token to cancel the operation.</param>
-    /// <returns>A connected <see cref="Stream"/> tunneled through the proxy.</returns>
-    public static ValueTask<Stream> ConnectAsync(Uri proxyUri, string host, int port,
-        TimeSpan timeout, CancellationToken cancellationToken = default)
-    {
-        return ConnectCoreAsync(proxyUri, host, port, timeout, cancellationToken);
-    }
-
-    /// <summary>
-    /// Negotiates a proxy tunnel over an existing stream (e.g. for proxy chaining).
-    /// No socket is created — the caller provides an already-connected stream to the proxy.
-    /// </summary>
-    /// <param name="proxyUri">
-    /// Proxy URI including scheme and optional credentials.
-    /// Supported schemes: http, https, socks4, socks4a, socks5.
-    /// </param>
-    /// <param name="source">An already-connected stream to the proxy server.</param>
-    /// <param name="host">The target host to connect to through the proxy.</param>
-    /// <param name="port">The target port.</param>
-    /// <param name="cancellationToken">A token to cancel the operation.</param>
-    /// <returns>A connected <see cref="Stream"/> tunneled through the proxy.</returns>
-    public static ValueTask<Stream> ConnectAsync(Uri proxyUri, Stream source, string host, int port,
-        CancellationToken cancellationToken = default)
-    {
-        var credentials = ParseCredentials(proxyUri);
-        return ProxyConnector.ConnectToProxyAsync(source, proxyUri, host, port, credentials, cancellationToken);
     }
 
     /// <summary>
@@ -377,80 +314,13 @@ public static class Proxy
         "build them from a share link instead.";
 
     // Records the text a client was built from, so a caller holding only IProxyClient can report
-    // the node it checked. ProxyUri cannot stand in: for the share-link families it is only
+    // the node it checked. ToString() cannot stand in: for the share-link families it is only
     // scheme://host:port, and writing a vless node out that way drops its uuid, sni and transport.
     private static IProxyClient Tag(IProxyClient client, string link)
     {
         if (client is ProxyClient concrete)
             concrete.SourceLink = link;
         return client;
-    }
-
-    private static async ValueTask<Stream> ConnectCoreAsync(Uri proxyUri, string host, int port,
-        TimeSpan? timeout, CancellationToken cancellationToken)
-    {
-        ProxyClient.ValidateArguments(host, port);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        var credentials = ParseCredentials(proxyUri);
-
-        // Dual-mode, as in ProxyClient.CreateSocket: an IPv4-only socket cannot reach a proxy at an
-        // IPv6 address.
-        var socket = new Socket(SocketType.Stream, ProtocolType.Tcp)
-        {
-            NoDelay = true,
-            LingerState = new LingerOption(true, 0)
-        };
-
-        ITimer? timer = null;
-        StrongBox<bool>? timedOut = null;
-        if (timeout.HasValue)
-        {
-            timedOut = new StrongBox<bool>(false);
-            timer = TimeProvider.System.CreateTimer(
-                static s =>
-                {
-                    var state = (Tuple<Socket, StrongBox<bool>>)s!;
-                    Volatile.Write(ref state.Item2.Value, true);
-                    state.Item1.Dispose();
-                },
-                Tuple.Create(socket, timedOut), timeout.Value, Timeout.InfiniteTimeSpan);
-        }
-
-        try
-        {
-            await socket.ConnectAsync(proxyUri.Host, proxyUri.Port, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            if (timer is not null) await timer.DisposeAsync();
-            socket.Dispose();
-            if (timedOut is not null && Volatile.Read(ref timedOut.Value))
-                throw new ProxyProtocolException(ProxyErrorCode.Timeout,
-                    $"Connection to proxy {proxyUri.Host}:{proxyUri.Port} timed out after {timeout!.Value}.", ex);
-            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
-                $"Failed to connect to proxy {proxyUri.Host}:{proxyUri.Port} for target {host}:{port}.", ex);
-        }
-
-        var stream = new NetworkStream(socket, ownsSocket: true);
-        try
-        {
-            var result = await ProxyConnector.ConnectToProxyAsync(stream, proxyUri, host, port, credentials,
-                cancellationToken);
-            // Dispose timer before returning to prevent race where timer fires
-            // and destroys the socket after we hand the stream to the caller.
-            if (timer is not null) await timer.DisposeAsync();
-            return result;
-        }
-        catch (Exception ex)
-        {
-            if (timer is not null) await timer.DisposeAsync();
-            await stream.DisposeAsync();
-            if (timedOut is not null && Volatile.Read(ref timedOut.Value))
-                throw new ProxyProtocolException(ProxyErrorCode.Timeout,
-                    $"Connection to proxy {proxyUri.Host}:{proxyUri.Port} timed out after {timeout!.Value}.", ex);
-            throw;
-        }
     }
 
     private static NetworkCredential? ParseCredentials(Uri proxyUri)
@@ -468,40 +338,5 @@ public static class Proxy
         return new NetworkCredential(
             Uri.UnescapeDataString(proxyUri.UserInfo.Substring(0, sep)),
             Uri.UnescapeDataString(proxyUri.UserInfo.Substring(sep + 1)));
-    }
-}
-
-/// <summary>
-/// Extension methods for connecting through proxies via <see cref="Uri"/>.
-/// </summary>
-public static class ProxyUriExtensions
-{
-    /// <summary>
-    /// Connects to a target host through the proxy specified by this URI.
-    /// </summary>
-    /// <param name="proxyUri">The proxy URI (scheme://[user:pass@]host:port).</param>
-    /// <param name="host">The target host.</param>
-    /// <param name="port">The target port.</param>
-    /// <param name="cancellationToken">A token to cancel the operation.</param>
-    /// <returns>A connected <see cref="Stream"/> tunneled through the proxy.</returns>
-    public static ValueTask<Stream> ConnectThroughProxyAsync(this Uri proxyUri, string host, int port,
-        CancellationToken cancellationToken = default)
-    {
-        return Proxy.ConnectAsync(proxyUri, host, port, cancellationToken);
-    }
-
-    /// <summary>
-    /// Connects to a target host through the proxy specified by this URI, with a timeout.
-    /// </summary>
-    /// <param name="proxyUri">The proxy URI (scheme://[user:pass@]host:port).</param>
-    /// <param name="host">The target host.</param>
-    /// <param name="port">The target port.</param>
-    /// <param name="timeout">Maximum time to wait for the connection.</param>
-    /// <param name="cancellationToken">A token to cancel the operation.</param>
-    /// <returns>A connected <see cref="Stream"/> tunneled through the proxy.</returns>
-    public static ValueTask<Stream> ConnectThroughProxyAsync(this Uri proxyUri, string host, int port,
-        TimeSpan timeout, CancellationToken cancellationToken = default)
-    {
-        return Proxy.ConnectAsync(proxyUri, host, port, timeout, cancellationToken);
     }
 }

@@ -18,7 +18,7 @@ public class PrefixedStreamTest
 
         var fakeStream = new Helpers.FakeProxyStream(combined);
         var result = await HttpHelper.EstablishHttpTunnelAsync(
-            fakeStream, new Uri("http://proxy:8080"), "target", 443, null, CancellationToken.None);
+            fakeStream, "target", 443, null, CancellationToken.None);
         return result;
     }
 

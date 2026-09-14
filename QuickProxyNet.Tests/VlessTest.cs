@@ -319,7 +319,7 @@ public class VlessTest
     [Fact]
     public void Client_IPv6Host_ConstructsWithoutThrowing()
     {
-        // The base ProxyClient ctor must bracket the IPv6 literal when composing ProxyUri.
+        // An IPv6 literal must pass through the base ProxyClient constructor and stay unbracketed.
         var client = new VlessClient(VlessShareLink.Parse($"vless://{Uuid}@[2001:db8::1]:443?security=none"));
         Assert.Equal("2001:db8::1", client.ProxyHost);
         Assert.Equal(443, client.ProxyPort);
