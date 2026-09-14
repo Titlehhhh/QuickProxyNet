@@ -180,6 +180,25 @@ public class TrojanTest
             () => client.ConnectAsync(stream, "example.org", 443, CancellationToken.None).AsTask());
     }
 
+    /// <summary>
+    /// An empty sni counts as absent for the TLS name, as it already did for the ws Host header. It
+    /// used to be sent as the name itself, so the hello carried neither the host header nor the
+    /// server address.
+    /// </summary>
+    [Fact]
+    public async Task Client_EmptySni_FallsBackToTheHostHeaderForTheTlsName()
+    {
+        var transport = new FakeProxyStream([]);
+        var client = new TrojanClient(new TrojanOptions
+        {
+            Password = Password, Host = "server.example.net", Port = 443, Sni = "", HostHeader = "cdn.example.net"
+        });
+
+        await Assert.ThrowsAsync<IOException>(() => client.ConnectAsync(transport, "example.org", 443).AsTask());
+
+        Assert.True(transport.WrittenBytes.AsSpan().IndexOf("cdn.example.net"u8) >= 0);
+    }
+
     // === Factory ===
 
     [Fact]

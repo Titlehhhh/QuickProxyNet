@@ -147,6 +147,15 @@ public static class TrojanShareLink
             AllowInsecure = allowInsecure,
             Remark = remark
         };
+
+        // The path and the Host header go into the HTTP upgrade request as they are, and %0D%0A in
+        // path=, host= or sni= decodes to a CR LF that ended a line of it.
+        if (!ProxyTransport.TryValidateRequest(options.TransportKind, options.Path, options.TransportHostHeader, out error))
+        {
+            options = null;
+            return false;
+        }
+
         error = null;
         return true;
     }

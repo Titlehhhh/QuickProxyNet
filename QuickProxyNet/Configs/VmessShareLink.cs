@@ -340,6 +340,15 @@ public static class VmessShareLink
                 ? Uri.UnescapeDataString(uri.Fragment[1..])
                 : null
         };
+
+        // The path and the Host header go into the HTTP upgrade request as they are, and %0D%0A in
+        // path=, host= or sni= decodes to a CR LF that ended a line of it.
+        if (!ProxyTransport.TryValidateRequest(options.TransportKind, options.Path, options.TransportHostHeader, out error))
+        {
+            options = null;
+            return false;
+        }
+
         error = null;
         return true;
     }
@@ -508,6 +517,16 @@ public static class VmessShareLink
                 return false;
             }
 
+            // Uri refuses such a host in every other grammar, but a JSON string holds anything, and
+            // a NUL in it cut the name short at the resolver.
+            int badHost = ProxyClient.IndexOfSpaceOrControl(host);
+            if (badHost >= 0)
+            {
+                error = "VMess share link server address cannot contain a space or an ASCII control character; " +
+                        $"this one has U+{(int)host[badHost]:X4} at index {badHost}.";
+                return false;
+            }
+
             if (GetInt32(portField, out int port) != FieldState.Ok || port <= 0 || port > 65535)
             {
                 error = "VMess share link is missing a valid server port.";
@@ -598,6 +617,15 @@ public static class VmessShareLink
                 AllowInsecure = GetBoolean(allowInsecureField) || GetBoolean(skipCertVerifyField),
                 Remark = remark
             };
+
+            // The path and the Host header go into the HTTP upgrade request as they are, and a JSON
+            // string can hold the CR LF that ended a line of it.
+            if (!ProxyTransport.TryValidateRequest(options.TransportKind, options.Path, options.TransportHostHeader, out error))
+            {
+                options = null;
+                return false;
+            }
+
             error = null;
             return true;
         }

@@ -24,8 +24,10 @@ public sealed class VlessClient : ProxyClient
     /// <summary>Creates a VLESS client from strongly-typed options.</summary>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
     /// <exception cref="ArgumentException">
-    /// The options carry an invalid UUID, or, for REALITY, a public key or short id that cannot be
-    /// decoded, or a server name or ALPN list that a ClientHello cannot carry.
+    /// The options carry an invalid UUID; or, for REALITY, a public key or short id that cannot be
+    /// decoded, or a server name or ALPN list that a ClientHello cannot carry; or, for <c>ws</c> and
+    /// <c>httpupgrade</c>, an ASCII control character in the path or the Host header; or a proxy host
+    /// with a space or an ASCII control character.
     /// </exception>
     public VlessClient(VlessOptions options)
         : base("vless", (options ?? throw new ArgumentNullException(nameof(options))).Host, options.Port)
@@ -57,9 +59,14 @@ public sealed class VlessClient : ProxyClient
             // The server name and ALPN list too. Past what one TLS record holds, the hello failed to
             // write after the TCP connect, as an InvalidOperationException or an
             // ArgumentOutOfRangeException out of ConnectAsync.
-            if (!TlsClientHello.TryValidate(options.RealityServerName, options.Alpn, out string? helloError))
+            if (!TlsClientHello.TryValidate(options.ServerName, options.Alpn, out string? helloError))
                 throw new ArgumentException(helloError, nameof(options));
         }
+
+        // A CR LF in the path or the Host header used to go into the HTTP upgrade request as it was.
+        if (!ProxyTransport.TryValidateRequest(
+                options.TransportKind, options.Path, options.TransportHostHeader, out string? requestError))
+            throw new ArgumentException(requestError, nameof(options));
 
         Options = options;
         _alpn = BuildAlpn(options.Alpn);
@@ -111,7 +118,7 @@ public sealed class VlessClient : ProxyClient
                 var ssl = new SslStream(layered, leaveInnerStreamOpen: false);
                 layered = ssl;
                 await TlsHandshake.AuthenticateAsync(
-                    ssl, BuildSslOptions(), Options.Sni ?? Options.Host, cancellationToken).ConfigureAwait(false);
+                    ssl, BuildSslOptions(), Options.ServerName, cancellationToken).ConfigureAwait(false);
             }
             else if (Options.Security == VlessSecurity.Reality)
             {
@@ -124,7 +131,7 @@ public sealed class VlessClient : ProxyClient
                 transport,
                 layered,
                 Options.Path,
-                ProxyTransport.ResolveHostHeader(Options.HostHeader, Options.Sni, Options.Host),
+                Options.TransportHostHeader,
                 cancellationToken).ConfigureAwait(false);
 
             return await VlessHelper.EstablishVlessTunnelAsync(layered, Options, host, port, cancellationToken)
@@ -167,7 +174,7 @@ public sealed class VlessClient : ProxyClient
     private RealityTlsOptions BuildRealityOptions() => new()
     {
         // Bounded by the constructor, like the ALPN list below.
-        ServerName = Options.RealityServerName,
+        ServerName = Options.ServerName,
         // Decoded and length-checked by the constructor; EnsureSupported has already refused a
         // REALITY configuration without a key.
         PublicKey = _realityPublicKey!,
@@ -177,9 +184,9 @@ public sealed class VlessClient : ProxyClient
 
     private SslClientAuthenticationOptions BuildSslOptions() => new()
     {
-        // Same precedence Xray applies: explicit SNI, else the transport Host header, else the
-        // server address. A ws+tls node commonly sets only 'host'.
-        TargetHost = Options.Sni ?? Options.HostHeader ?? Options.Host,
+        // The name REALITY sends too: explicit SNI, else the transport Host header, else the server
+        // address, an empty one counting as absent (see TlsHandshake.ResolveServerName).
+        TargetHost = Options.ServerName,
         EnabledSslProtocols = SslProtocols,
         RemoteCertificateValidationCallback = ServerCertificateValidationCallback,
         ApplicationProtocols = _alpn

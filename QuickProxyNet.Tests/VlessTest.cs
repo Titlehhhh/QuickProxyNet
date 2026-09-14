@@ -545,6 +545,41 @@ public class VlessTest
         Assert.Throws<ArgumentException>(() => new VlessClient(RealityOptions(sni: sni)));
     }
 
+    /// <summary>
+    /// An empty sni on options built by hand counts as absent, as it already did when the ws Host
+    /// header is picked. It used to be sent as the name itself, so the hello carried none of the
+    /// names the options gave, over REALITY and over TLS alike.
+    /// </summary>
+    [Fact]
+    public async Task EmptySniOrHostHeader_CountsAsAbsent_ForTheServerName()
+    {
+        byte[] hello = await RealityHello(RealityOptions(host: "server.example.net", sni: "", hostHeader: "cdn.example.net"));
+        Assert.True(Carries(hello, "cdn.example.net"u8), "REALITY: an empty sni falls back to the host header");
+
+        hello = await RealityHello(RealityOptions(host: "server.example.net", sni: "", hostHeader: ""));
+        Assert.True(Carries(hello, "server.example.net"u8), "REALITY: empty sni and host header fall back to the server");
+
+        var tls = new VlessOptions
+        {
+            Id = Uuid, Host = "server.example.net", Port = 443, Security = VlessSecurity.Tls,
+            Sni = "", HostHeader = "cdn.example.net"
+        };
+        var transport = new FakeProxyStream([]);
+        await Assert.ThrowsAsync<IOException>(() => new VlessClient(tls).ConnectAsync(transport, "example.org", 443).AsTask());
+        Assert.True(Carries(transport.WrittenBytes, "cdn.example.net"u8), "TLS: an empty sni falls back to the host header");
+
+        static async Task<byte[]> RealityHello(VlessOptions options)
+        {
+            // Nothing answers, so the handshake ends at the first read, after the hello is written.
+            var transport = new FakeProxyStream([]);
+            await Assert.ThrowsAsync<RealityHandshakeException>(() =>
+                new VlessClient(options).ConnectAsync(transport, "example.org", 443).AsTask());
+            return transport.WrittenBytes;
+        }
+    }
+
+    private static bool Carries(byte[] written, ReadOnlySpan<byte> name) => written.AsSpan().IndexOf(name) >= 0;
+
     [Fact]
     public void Reality_AlpnBeyondWhatAHelloCarries_IsRefusedBeforeAnyConnect()
     {

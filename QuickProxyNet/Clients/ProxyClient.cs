@@ -13,6 +13,19 @@ public abstract class ProxyClient : IProxyClient
         if (host.Length > 255)
             throw new ArgumentException("A host name is at most 255 characters.", nameof(host));
 
+        // The characters ValidateArguments refuses in a target, for the same reason: no host name
+        // contains them. A NUL cut the name short at the resolver, so "localhost\0evil.example"
+        // connected to localhost, and the proxy host also becomes a TLS name and, over ws and
+        // httpupgrade, a Host header. Every client and Proxy.Create(ProxyType, ...) come through
+        // here. The share-link parsers whose grammar can hand such a host over refuse it first, as a
+        // malformed link.
+        int bad = IndexOfSpaceOrControl(host);
+        if (bad >= 0)
+            throw new ArgumentException(
+                $"A proxy host cannot contain a space or an ASCII control character; this one has " +
+                $"U+{(int)host[bad]:X4} at index {bad}.",
+                nameof(host));
+
         // Zero is allowed here and means the default port.
         ArgumentOutOfRangeException.ThrowIfNegative(port);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(port, 65535);
@@ -240,17 +253,34 @@ public abstract class ProxyClient : IProxyClient
         // internationalised name is a host name, and UTF-8 never encodes one as a byte below 0x80.
         // The message gives the position rather than the host, which would carry the same
         // characters into a log.
-        for (int i = 0; i < host.Length; i++)
-        {
-            if (host[i] <= ' ' || host[i] == (char)0x7F) // 0x7F is DEL
-                throw new ArgumentException(
-                    $"A target host cannot contain a space or an ASCII control character; this one has " +
-                    $"U+{(int)host[i]:X4} at index {i}.",
-                    nameof(host));
-        }
+        int bad = IndexOfSpaceOrControl(host);
+        if (bad >= 0)
+            throw new ArgumentException(
+                $"A target host cannot contain a space or an ASCII control character; this one has " +
+                $"U+{(int)host[bad]:X4} at index {bad}.",
+                nameof(host));
 
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(port);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(port, 65535);
+    }
+
+    /// <summary>
+    /// The index of the first space or ASCII control character (0x00-0x1F, 0x7F) in
+    /// <paramref name="host"/>, or -1 when it has none.
+    /// </summary>
+    /// <remarks>
+    /// One rule for every place a host enters: a target, a proxy host, and the share-link grammars
+    /// that hand a host over without <see cref="Uri"/> having parsed it.
+    /// </remarks>
+    internal static int IndexOfSpaceOrControl(ReadOnlySpan<char> host)
+    {
+        for (int i = 0; i < host.Length; i++)
+        {
+            if (host[i] <= ' ' || host[i] == (char)0x7F) // 0x7F is DEL
+                return i;
+        }
+
+        return -1;
     }
 
     // The EndPoint overloads spell the target the way the host-and-port ones take it. An

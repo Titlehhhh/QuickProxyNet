@@ -194,11 +194,19 @@ public static class VlessShareLink
             Remark = remark
         };
 
+        // The path and the Host header go into the HTTP upgrade request as they are, and %0D%0A in
+        // path=, host= or sni= decodes to a CR LF that ended a line of it.
+        if (!ProxyTransport.TryValidateRequest(options.TransportKind, options.Path, options.TransportHostHeader, out error))
+        {
+            options = null;
+            return false;
+        }
+
         // The server name and ALPN list go into a ClientHello written as one TLS record. Past what it
         // holds, the write failed after the TCP connect with an exception ConnectAsync may not throw,
         // so a link that could never be sent is refused here.
         if (security == VlessSecurity.Reality &&
-            !TlsClientHello.TryValidate(options.RealityServerName, options.Alpn, out error))
+            !TlsClientHello.TryValidate(options.ServerName, options.Alpn, out error))
         {
             options = null;
             return false;

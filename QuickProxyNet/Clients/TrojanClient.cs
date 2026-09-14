@@ -26,7 +26,10 @@ public sealed class TrojanClient : ProxyClient
 
     /// <summary>Creates a Trojan client from strongly-typed options.</summary>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
-    /// <exception cref="ArgumentException">The password is empty.</exception>
+    /// <exception cref="ArgumentException">
+    /// The password is empty; or, for <c>ws</c> and <c>httpupgrade</c>, the path or the Host header
+    /// has an ASCII control character; or the proxy host has a space or an ASCII control character.
+    /// </exception>
     public TrojanClient(TrojanOptions options)
         : base("trojan", (options ?? throw new ArgumentNullException(nameof(options))).Host, options.Port)
     {
@@ -34,6 +37,11 @@ public sealed class TrojanClient : ProxyClient
         // server accepts, so reject it at construction rather than mid-connect.
         if (string.IsNullOrEmpty(options.Password))
             throw new ArgumentException("Trojan password must not be empty.", nameof(options));
+
+        // A CR LF in the path or the Host header used to go into the HTTP upgrade request as it was.
+        if (!ProxyTransport.TryValidateRequest(
+                options.TransportKind, options.Path, options.TransportHostHeader, out string? requestError))
+            throw new ArgumentException(requestError, nameof(options));
 
         Options = options;
         _alpn = BuildAlpn(options.Alpn);
@@ -73,14 +81,14 @@ public sealed class TrojanClient : ProxyClient
         try
         {
             await TlsHandshake.AuthenticateAsync(
-                (SslStream)layered, BuildSslOptions(), Options.Sni ?? Options.Host, cancellationToken)
+                (SslStream)layered, BuildSslOptions(), Options.ServerName, cancellationToken)
                 .ConfigureAwait(false);
 
             layered = await ProxyTransport.ApplyAsync(
                 transport,
                 layered,
                 Options.Path,
-                ProxyTransport.ResolveHostHeader(Options.HostHeader, Options.Sni, Options.Host),
+                Options.TransportHostHeader,
                 cancellationToken).ConfigureAwait(false);
 
             await TrojanHelper.EstablishTrojanTunnelAsync(layered, Options, host, port, cancellationToken)
@@ -107,9 +115,9 @@ public sealed class TrojanClient : ProxyClient
 
     private SslClientAuthenticationOptions BuildSslOptions() => new()
     {
-        // Same precedence Xray applies: explicit SNI, else the transport Host header, else the
-        // server address. A ws+tls node commonly sets only 'host'.
-        TargetHost = Options.Sni ?? Options.HostHeader ?? Options.Host,
+        // Explicit SNI, else the transport Host header, else the server address, an empty one
+        // counting as absent (see TlsHandshake.ResolveServerName).
+        TargetHost = Options.ServerName,
         EnabledSslProtocols = SslProtocols,
         RemoteCertificateValidationCallback = Options.AllowInsecure
             ? static (_, _, _, _) => true

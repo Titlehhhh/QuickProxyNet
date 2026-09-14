@@ -25,6 +25,27 @@ namespace QuickProxyNet;
 internal static class TlsHandshake
 {
     /// <summary>
+    /// The name a TLS or REALITY handshake sends in SNI: the explicit SNI, else the transport Host
+    /// header, else the server address. That is the precedence Xray applies, and a ws+tls node
+    /// commonly sets only <c>host</c>.
+    /// </summary>
+    /// <remarks>
+    /// An empty string counts as absent, as it already did when the Host header is picked. Options
+    /// built by hand with <c>Sni = ""</c> used to send the empty string as the name: the hello
+    /// carried none of the names the options did give, and a REALITY server, which is Go's
+    /// crypto/tls underneath, matches a hello without one against none of its configured names. A
+    /// share link never produces an empty value.
+    /// </remarks>
+    public static string ResolveServerName(string? sni, string? hostHeader, string serverHost)
+    {
+        if (!string.IsNullOrEmpty(sni))
+            return sni;
+        if (!string.IsNullOrEmpty(hostHeader))
+            return hostHeader;
+        return serverHost;
+    }
+
+    /// <summary>
     /// Performs <see cref="SslStream.AuthenticateAsClientAsync(SslClientAuthenticationOptions, CancellationToken)"/>,
     /// converting <see cref="AuthenticationException"/> into
     /// <see cref="ProxyErrorCode.TlsHandshakeFailed"/>.

@@ -710,6 +710,25 @@ public class VmessClientTest
         Assert.Equal($"vmess://{ProxyHost}:{ProxyPort}", client.ToString());
     }
 
+    /// <summary>
+    /// An empty sni counts as absent for the TLS name, as it already did for the ws Host header. It
+    /// used to be sent as the name itself, so the hello carried neither the host header nor the
+    /// server address. A link never gives an empty one; options built by hand can.
+    /// </summary>
+    [Fact]
+    public async Task Client_EmptySni_FallsBackToTheHostHeaderForTheTlsName()
+    {
+        var transport = new FakeProxyStream([]);
+        var client = new VmessClient(new VmessOptions
+        {
+            Id = Uuid, Host = "server.example.net", Port = 443, UseTls = true, Sni = "", HostHeader = "cdn.example.net"
+        });
+
+        await Assert.ThrowsAsync<IOException>(() => client.ConnectAsync(transport, "example.org", 443).AsTask());
+
+        Assert.True(transport.WrittenBytes.AsSpan().IndexOf("cdn.example.net"u8) >= 0);
+    }
+
     [Fact]
     public void Client_IPv6Host_ConstructsWithoutThrowing()
     {

@@ -395,6 +395,16 @@ public static class ShadowsocksShareLink
             return false;
         }
 
+        // Scanned by hand, so nothing else has refused these, and the legacy form's base64 can hold
+        // any of them. A NUL cut the name short at the resolver.
+        int bad = ProxyClient.IndexOfSpaceOrControl(host);
+        if (bad >= 0)
+        {
+            error = "Shadowsocks share link server host cannot contain a space or an ASCII control character; " +
+                    $"this one has U+{(int)host[bad]:X4} at index {bad}.";
+            return false;
+        }
+
         if (!portText.IsEmpty)
         {
             if (!int.TryParse(portText, System.Globalization.NumberStyles.None,

@@ -263,6 +263,91 @@ public class ProxyFactoryTest
         Assert.Empty(stream.WrittenBytes);
     }
 
+    /// <summary>
+    /// A proxy host is refused, by the constructor every client shares, for the characters a target
+    /// host is refused for. Proxy.Create(ProxyType, ...) and options built by hand both reach it. A
+    /// NUL cut the name short at the resolver: Dns.GetHostAddresses("localhost\0evil.example")
+    /// returns localhost's addresses.
+    /// </summary>
+    [Theory]
+    [InlineData(0x00)]
+    [InlineData(0x09)]
+    [InlineData(0x0A)]
+    [InlineData(0x0D)]
+    [InlineData(0x1F)]
+    [InlineData(0x20)]
+    [InlineData(0x7F)]
+    public void Constructor_ProxyHostWithSpaceOrControlCharacter_IsRefused(int character)
+    {
+        string host = $"proxy{(char)character}evil.example";
+
+        Func<object>[] constructors =
+        [
+            () => new HttpProxyClient(host, 8080),
+            () => Proxy.Create(ProxyType.Socks5, host, 1080, null),
+            () => Proxy.Create(ProxyType.Https, host, 443, new NetworkCredential("user", "password")),
+            () => new VlessClient(new VlessOptions { Id = Uuid, Host = host, Port = 443 }),
+            () => new TrojanClient(new TrojanOptions { Password = "password", Host = host, Port = 443 }),
+            () => new VmessClient(new VmessOptions { Id = Uuid, Host = host, Port = 443 }),
+            () => new ShadowsocksClient(new ShadowsocksOptions
+            {
+                Method = "aes-256-gcm", Password = "password", Host = host, Port = 8388
+            }),
+        ];
+
+        foreach (Func<object> construct in constructors)
+        {
+            var ex = Assert.Throws<ArgumentException>(construct);
+            Assert.Equal("host", ex.ParamName);
+            Assert.Contains($"U+{character:X4} at index 5", ex.Message);
+            Assert.DoesNotContain("evil", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// No link grammar may hand a client such a host either, and each refuses it as a malformed link.
+    /// Uri already refused one for the classic schemes, vless, trojan and the vmess URI form. The ss://
+    /// authority is scanned by hand and a vmess JSON string holds anything, and both of those built a
+    /// client with the host as it was.
+    /// </summary>
+    [Fact]
+    public void Create_LinkWhoseProxyHostHasAControlCharacter_IsRefusedAsMalformed()
+    {
+        const string host = "proxy\0evil.example";
+        string json = $$"""{"add":"proxy\u0000evil.example","port":"443","id":"{{Uuid}}","aid":"0","net":"tcp"}""";
+
+        string[] refusedByUri =
+        [
+            $"socks5://{host}:1080",
+            $"http://{host}:8080",
+            $"vless://{Uuid}@{host}:443?security=none",
+            $"trojan://password@{host}:443",
+            $"vmess://{Uuid}@{host}:443?type=tcp",
+        ];
+
+        // These two built a client. The refusal must be the host check, not some other reason the
+        // link could not be read, so the message has to name the character.
+        string[] refusedByTheParser =
+        [
+            "vmess://" + Convert.ToBase64String(Encoding.UTF8.GetBytes(json)),
+            $"ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@{host}:8388",
+            "ss://" + Convert.ToBase64String(Encoding.UTF8.GetBytes("aes-256-gcm:password@proxy\r\nevil.example:8388")),
+        ];
+
+        foreach (string link in refusedByUri)
+        {
+            var ex = Assert.Throws<FormatException>(() => Create(link));
+            Assert.DoesNotContain("evil", ex.Message);
+        }
+
+        foreach (string link in refusedByTheParser)
+        {
+            var ex = Assert.Throws<FormatException>(() => Create(link));
+            Assert.Contains("control character", ex.Message);
+            Assert.DoesNotContain("evil", ex.Message);
+        }
+    }
+
     [Fact]
     public void Create_MalformedKnownScheme_ThrowsFormat()
     {
