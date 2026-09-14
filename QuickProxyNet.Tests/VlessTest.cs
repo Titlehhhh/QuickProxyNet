@@ -193,9 +193,9 @@ public class VlessTest
     public void Parse_Reality_KeepsKeys()
     {
         var o = VlessShareLink.Parse(
-            $"vless://{Uuid}@example.com:443?security=reality&pbk=PUBKEY&sid=ab12&sni=www.microsoft.com&fp=chrome&flow=xtls-rprx-vision#r");
+            $"vless://{Uuid}@example.com:443?security=reality&pbk=BhsV4NiigG9rrk98hJnJHPJ7TQ6Iy1WqUykGF0z9I2g&sid=ab12&sni=www.microsoft.com&fp=chrome&flow=xtls-rprx-vision#r");
         Assert.Equal(VlessSecurity.Reality, o.Security);
-        Assert.Equal("PUBKEY", o.RealityPublicKey);
+        Assert.Equal("BhsV4NiigG9rrk98hJnJHPJ7TQ6Iy1WqUykGF0z9I2g", o.RealityPublicKey);
         Assert.Equal("ab12", o.RealityShortId);
         Assert.Equal("chrome", o.Fingerprint);
         Assert.Equal("xtls-rprx-vision", o.Flow);
@@ -250,11 +250,11 @@ public class VlessTest
     public void Parse_HtmlEscapedSeparators_DoNotSilentlyDowngradeRealityToPlaintext()
     {
         var o = VlessShareLink.Parse(
-            $"vless://{Uuid}@example.com:443?type=tcp&amp;security=reality&amp;pbk=PUBKEY" +
+            $"vless://{Uuid}@example.com:443?type=tcp&amp;security=reality&amp;pbk=BhsV4NiigG9rrk98hJnJHPJ7TQ6Iy1WqUykGF0z9I2g" +
             "&amp;sid=ab12&amp;flow=xtls-rprx-vision");
 
         Assert.Equal(VlessSecurity.Reality, o.Security);
-        Assert.Equal("PUBKEY", o.RealityPublicKey);
+        Assert.Equal("BhsV4NiigG9rrk98hJnJHPJ7TQ6Iy1WqUykGF0z9I2g", o.RealityPublicKey);
         Assert.Equal("ab12", o.RealityShortId);
         Assert.Equal("xtls-rprx-vision", o.Flow);
     }
@@ -437,25 +437,59 @@ public class VlessTest
     }
 
     /// <summary>
-    /// A <c>pbk</c> that is not a key is a configuration error and must be reported as one —
-    /// naming the value, before anything is written — rather than as "REALITY not supported"
-    /// (which it is) or as an ArgumentException from inside the handshake.
+    /// A <c>pbk</c> that is not a key is a configuration error, reported with the value named when
+    /// the link is parsed or the client is built. It used to surface from ConnectAsync as a
+    /// FormatException, which that call may not throw.
     /// </summary>
     [Theory]
-    [InlineData("x")]                                        // not base64url at all
-    [InlineData("AAAA")]                                     // decodes to 3 bytes, not 32
-    public async Task Client_Reality_MalformedPublicKey_ThrowsFormatBeforeWriting(string pbk)
+    [InlineData("x")]    // not base64url at all
+    [InlineData("AAAA")] // decodes to 3 bytes, not 32
+    public void Reality_MalformedPublicKey_IsRefusedBeforeAnyConnect(string pbk)
     {
-        var stream = new FakeProxyStream([0x00, 0x00]);
-        var client = new VlessClient(
+        var parse = Assert.Throws<FormatException>(() =>
             VlessShareLink.Parse($"vless://{Uuid}@example.com:443?security=reality&pbk={pbk}"));
+        Assert.Contains($"'{pbk}'", parse.Message);
 
-        var ex = await Assert.ThrowsAsync<FormatException>(
-            () => client.ConnectAsync(stream, "example.org", 443, CancellationToken.None).AsTask());
-
-        Assert.Contains(pbk, ex.Message);
+        var options = new VlessOptions
+        {
+            Id = Uuid, Host = "example.com", Port = 443, Security = VlessSecurity.Reality, RealityPublicKey = pbk
+        };
+        var construct = Assert.Throws<ArgumentException>(() => new VlessClient(options));
+        Assert.Contains($"'{pbk}'", construct.Message);
     }
 
+    [Theory]
+    [InlineData("abc")]                // odd length
+    [InlineData("zz")]                 // not hex
+    [InlineData("001122334455667788")] // nine bytes, one more than a short id holds
+    public void Reality_MalformedShortId_IsRefusedBeforeAnyConnect(string sid)
+    {
+        const string pbk = "BhsV4NiigG9rrk98hJnJHPJ7TQ6Iy1WqUykGF0z9I2g";
+
+        var parse = Assert.Throws<FormatException>(() =>
+            VlessShareLink.Parse($"vless://{Uuid}@example.com:443?security=reality&pbk={pbk}&sid={sid}"));
+        Assert.Contains($"'{sid}'", parse.Message);
+
+        var options = new VlessOptions
+        {
+            Id = Uuid, Host = "example.com", Port = 443, Security = VlessSecurity.Reality,
+            RealityPublicKey = pbk, RealityShortId = sid
+        };
+        Assert.Throws<ArgumentException>(() => new VlessClient(options));
+    }
+
+    [Fact]
+    public void Reality_PublicKeyWithUnusedTrailingBitsSet_DecodesToTheSameKey()
+    {
+        // A 43-character key's last character carries two bits no byte uses. Go ignores them and
+        // so does .NET 10; .NET 11 alone would refuse the key.
+        const string canonical = "BhsV4NiigG9rrk98hJnJHPJ7TQ6Iy1WqUykGF0z9I2g";
+        string loose = canonical[..^1] + "h";
+
+        Assert.True(RealityAuth.TryDecodePublicKey(canonical, out byte[]? expected, out _));
+        Assert.True(RealityAuth.TryDecodePublicKey(loose, out byte[]? actual, out _));
+        Assert.Equal(expected, actual);
+    }
     /// <summary>
     /// REALITY failures are proxy errors like any other: the type carries a code a caller can
     /// branch on, and the two codes it uses mean different things to act on.

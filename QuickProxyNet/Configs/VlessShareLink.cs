@@ -159,6 +159,19 @@ public static class VlessShareLink
             }
         }
 
+        // A REALITY key or short id that cannot be decoded describes a node nobody can reach, so
+        // the link is refused here with the value named. The alternative was a FormatException
+        // out of ConnectAsync, which that call may not throw.
+        if (security == VlessSecurity.Reality)
+        {
+            if (!string.IsNullOrEmpty(pbk) && !RealityAuth.TryDecodePublicKey(pbk, out _, out error))
+                return false;
+
+            Span<byte> shortId = stackalloc byte[RealityAuth.ShortIdSize];
+            if (!RealityAuth.TryParseShortId(shortId, sid, out error))
+                return false;
+        }
+
         string? remark = uri.Fragment.Length > 1
             ? Uri.UnescapeDataString(uri.Fragment.Substring(1))
             : null;
