@@ -46,6 +46,30 @@ public class HttpsProxyClientTest
         Assert.False(errors.Value.HasFlag(SslPolicyErrors.RemoteCertificateNameMismatch), $"Policy errors: {errors}");
     }
 
+    /// <summary>
+    /// Without a callback of the caller's, an untrusted certificate is refused by SslStream's own
+    /// check, whose message names the policy error. The library's former default callback made
+    /// every such failure read "rejected by the provided RemoteCertificateValidationCallback".
+    /// </summary>
+    [Fact]
+    public async Task UntrustedCertificate_WithoutACallback_IsRefused_NamingTheReason()
+    {
+        using X509Certificate2 certificate = CreateSelfSignedCertificate("localhost");
+        using var proxy = new LoopbackConnectProxy(IPAddress.Loopback, certificate);
+        var client = new HttpsProxyClient("localhost", proxy.Port);
+
+        using var socket = new TcpClient();
+        await socket.ConnectAsync(IPAddress.Loopback, proxy.Port);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var ex = await Assert.ThrowsAsync<ProxyProtocolException>(
+            async () => await client.ConnectAsync(socket.GetStream(), "example.com", 443, cts.Token));
+
+        Assert.Equal(ProxyErrorCode.TlsHandshakeFailed, ex.ErrorCode);
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+            Assert.DoesNotContain("RemoteCertificateValidationCallback", e.Message);
+    }
+
     private static X509Certificate2 CreateSelfSignedCertificate(string dnsName)
     {
         using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
