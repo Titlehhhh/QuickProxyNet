@@ -96,17 +96,31 @@ public abstract class ProxyClient : IProxyClient
 
     private Socket CreateSocket()
     {
-        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
+        // Socket(SocketType, ProtocolType) is dual-mode wherever the OS has IPv6, so the proxy is
+        // reachable at an address of either family; an IPv4-only socket fails every IPv6 proxy.
+        // A LocalEndPoint is the caller choosing the interface, and with it the family.
+        IPEndPoint? local = LocalEndPoint;
+        var socket = local is null
+            ? new Socket(SocketType.Stream, ProtocolType.Tcp)
+            : new Socket(local.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+        try
         {
-            NoDelay = this.NoDelay,
-            SendTimeout = this.WriteTimeout,
-            ReceiveTimeout = this.ReadTimeout
-        };
-        if (LingerState is not null)
-            socket.LingerState = LingerState;
-        if (LocalEndPoint is not null)
-            socket.Bind(LocalEndPoint);
-        return socket;
+            socket.NoDelay = NoDelay;
+            socket.SendTimeout = WriteTimeout;
+            socket.ReceiveTimeout = ReadTimeout;
+            if (LingerState is not null)
+                socket.LingerState = LingerState;
+            if (local is not null)
+                socket.Bind(local);
+            return socket;
+        }
+        catch
+        {
+            // A failed bind must not leak the handle: under a few thousand concurrent checks the
+            // leak is what turns one address-in-use into handle exhaustion.
+            socket.Dispose();
+            throw;
+        }
     }
 
     public async ValueTask<Stream> ConnectAsync(string host, int port, CancellationToken cancellationToken = default)

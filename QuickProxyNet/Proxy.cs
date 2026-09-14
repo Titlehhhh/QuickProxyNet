@@ -354,7 +354,9 @@ public static class Proxy
 
         var credentials = ParseCredentials(proxyUri);
 
-        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
+        // Dual-mode, as in ProxyClient.CreateSocket: an IPv4-only socket cannot reach a proxy at an
+        // IPv6 address.
+        var socket = new Socket(SocketType.Stream, ProtocolType.Tcp)
         {
             NoDelay = true,
             LingerState = new LingerOption(true, 0)

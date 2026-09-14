@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Security.Cryptography;
 using Xunit.Sdk;
@@ -162,4 +164,39 @@ public sealed class ChaCha20InlineDataAttribute : DataAttribute
 
     /// <inheritdoc />
     public override IEnumerable<object[]> GetData(MethodInfo testMethod) => [_data];
+}
+
+/// <summary>
+/// A <see cref="FactAttribute"/> that reports the test as <b>skipped</b> on a machine that cannot
+/// listen on the IPv6 loopback address.
+/// </summary>
+/// <remarks>
+/// <see cref="Socket.OSSupportsIPv6"/> alone does not decide it: a container can have the IPv6
+/// stack and no <c>::1</c>, so the gate actually binds.
+/// </remarks>
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class IPv6LoopbackFactAttribute : FactAttribute
+{
+    private static readonly bool Available = CanBindIPv6Loopback();
+
+    /// <summary>Creates the attribute, deciding the skip state from the machine.</summary>
+    public IPv6LoopbackFactAttribute() =>
+        Skip = Available ? null : "This machine cannot listen on the IPv6 loopback address (::1).";
+
+    private static bool CanBindIPv6Loopback()
+    {
+        if (!Socket.OSSupportsIPv6)
+            return false;
+
+        try
+        {
+            using var socket = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
+            socket.Bind(new IPEndPoint(IPAddress.IPv6Loopback, 0));
+            return true;
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
+    }
 }
