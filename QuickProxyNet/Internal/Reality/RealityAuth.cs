@@ -79,22 +79,25 @@ internal static class RealityAuth
             throw new ArgumentException("The client random is 32 bytes.", nameof(clientRandom));
 
         Span<byte> shared = stackalloc byte[X25519.KeySize];
+        Span<byte> prk = stackalloc byte[AuthKeySize];
+        Span<byte> info = stackalloc byte[HkdfInfo.Length + 1];
         try
         {
             X25519.Agree(shared, clientPrivateKey, serverPublicKey);
 
-            // Not derived in place: HKDF reads the input while writing the output, and the two
-            // are the same size here, so aliasing them would be a silent corruption.
-            HKDF.DeriveKey(
-                HashAlgorithmName.SHA256,
-                ikm: shared,
-                output: authKey,
-                salt: clientRandom[..20],
-                info: HkdfInfo);
+            // HKDF-SHA256 with a 32-byte output is Extract, then the single Expand block
+            // HMAC(prk, info || 0x01). Spelled out because HKDF.DeriveKey allocates about 300
+            // bytes a call on net9 and net10. Not derived in place: the shared secret, the PRK and
+            // the auth key are all 32 bytes, and aliasing any two would corrupt silently.
+            HKDF.Extract(HashAlgorithmName.SHA256, shared, clientRandom[..20], prk);
+            HkdfInfo.CopyTo(info);
+            info[^1] = 0x01;
+            HMACSHA256.HashData(prk, info, authKey);
         }
         finally
         {
             CryptographicOperations.ZeroMemory(shared);
+            CryptographicOperations.ZeroMemory(prk);
         }
     }
 
