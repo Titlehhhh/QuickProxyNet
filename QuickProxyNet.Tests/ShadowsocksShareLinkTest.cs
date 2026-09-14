@@ -251,17 +251,20 @@ public class ShadowsocksShareLinkTest
 
     /// <summary>Whatever a malformed link throws, the credential in it must not be in the message.</summary>
     [Theory]
-    [InlineData("ss://aes-256-gcm:SECRETPASSWORD@:8388")]
-    [InlineData("ss://aes-256-gcm:SECRETPASSWORD@example.com:99999")]
-    [InlineData("ss://aes-256-gcm:SECRETPASSWORD@[2001:db8::1")]
-    [InlineData("ss://rc4-md5:SECRETPASSWORD@example.com:8388")]
-    [InlineData("ss://aes-256-gcm:SECRETPASSWORD@example.com:8388/?plugin=v2ray-plugin%3Bmode%3Dwebsocket")]
-    [InlineData("ss://SECRETPASSWORD:aes-256-gcm@example.com:8388")]                      // swapped fields: the password lands where the cipher goes
-    [InlineData("ss://SECRET%2FPASSWORD%3D:aes-256-gcm@example.com:8388")]                 // same, with characters no cipher name has
-    [InlineData("ss://U0VDUkVUUEFTU1dPUkQ6YWVzLTI1Ni1nY20@example.com:8388")]              // same, base64("SECRETPASSWORD:aes-256-gcm")
-    public void Errors_NeverEchoTheCredential(string link)
+    [InlineData("ss://aes-256-gcm:SECRETPASSWORD@:8388", typeof(FormatException))]
+    [InlineData("ss://aes-256-gcm:SECRETPASSWORD@example.com:99999", typeof(FormatException))]
+    [InlineData("ss://aes-256-gcm:SECRETPASSWORD@[2001:db8::1", typeof(FormatException))]
+    [InlineData("ss://rc4-md5:SECRETPASSWORD@example.com:8388", typeof(NotSupportedException))]
+    [InlineData("ss://aes-256-gcm:SECRETPASSWORD@example.com:8388/?plugin=v2ray-plugin%3Bmode%3Dwebsocket", typeof(NotSupportedException))]
+    [InlineData("ss://SECRETPASSWORD:aes-256-gcm@example.com:8388", typeof(NotSupportedException))]                      // swapped fields: the password lands where the cipher goes
+    [InlineData("ss://SECRET%2FPASSWORD%3D:aes-256-gcm@example.com:8388", typeof(NotSupportedException))]                 // same, with characters no cipher name has
+    [InlineData("ss://U0VDUkVUUEFTU1dPUkQ6YWVzLTI1Ni1nY20@example.com:8388", typeof(NotSupportedException))]              // same, base64("SECRETPASSWORD:aes-256-gcm")
+    public void Errors_NeverEchoTheCredential(string link, Type expected)
     {
-        Exception ex = Assert.ThrowsAny<Exception>(() => ShadowsocksClient.FromShareLink(link));
+        // A link the parser cannot read is a FormatException; one naming a cipher or plugin this library
+        // does not speak is a NotSupportedException. Any exception at all would also have been a failed
+        // Debug.Assert.
+        Exception ex = Assert.Throws(expected, () => ShadowsocksClient.FromShareLink(link));
 
         for (Exception? e = ex; e is not null; e = e.InnerException)
             Assert.DoesNotContain("SECRET", e.Message);

@@ -279,7 +279,7 @@ public class VlessTest
         // A MemoryStream answers every read with "end of stream", so the handshake cannot
         // complete — but what was written before it failed is the point.
         var transport = new MemoryStream();
-        Assert.ThrowsAny<Exception>(() =>
+        Assert.Throws<RealityHandshakeException>(() =>
             new VlessClient(o).ConnectAsync(transport, "example.com", 443).AsTask().GetAwaiter().GetResult());
 
         byte[] written = transport.ToArray();

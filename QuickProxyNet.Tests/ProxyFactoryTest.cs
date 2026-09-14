@@ -431,7 +431,9 @@ public class ProxyFactoryTest
     [InlineData("vmess://SECRETPASSWORD-this-is-not-base64-json")]                               // not base64 JSON
     public void Create_MalformedLink_NeverEchoesTheCredential(string link)
     {
-        Exception ex = Assert.ThrowsAny<Exception>(() => Create(link));
+        // Every one of these is a malformed link, whichever parser refuses it. Accepting any exception
+        // would also have accepted a failed Debug.Assert.
+        var ex = Assert.Throws<FormatException>(() => Create(link));
 
         for (Exception? e = ex; e is not null; e = e.InnerException)
             Assert.DoesNotContain("SECRET", e.Message);
@@ -452,23 +454,25 @@ public class ProxyFactoryTest
     }
 
     [Theory]
-    [InlineData("")]                                        // empty
-    [InlineData("   ")]                                     // whitespace only
-    [InlineData("example.com:1080")]                        // no scheme
-    [InlineData("hysteria2://not-a-scheme-we-speak@host:443")] // unsupported scheme
-    [InlineData("ss://not!base64!@host:443")]                  // known scheme, broken userinfo
-    [InlineData("ss://rc4-md5:pw@host:8388")]                  // known scheme, cipher we refuse
-    [InlineData("vmess://this-is-not-base64-json")]         // known scheme, broken payload
-    [InlineData("vless://" + "a-31-character-id-aaaaaaaaaaaaa" + "@example.com:443")] // id length 31: too long to derive, too short to be hex
-    public void TryCreate_BadLink_ReturnsFalseWithAReason(string link)
+    [InlineData("", "ArgumentException")]                                        // empty
+    [InlineData("   ", "ArgumentException")]                                     // whitespace only
+    [InlineData("example.com:1080", "ArgumentException")]                        // no scheme
+    [InlineData("hysteria2://not-a-scheme-we-speak@host:443", "NotSupportedException")] // unsupported scheme
+    [InlineData("ss://not!base64!@host:443", "FormatException")]                  // known scheme, broken userinfo
+    [InlineData("ss://rc4-md5:pw@host:8388", "NotSupportedException")]                  // known scheme, cipher we refuse
+    [InlineData("vmess://this-is-not-base64-json", "FormatException")]         // known scheme, broken payload
+    [InlineData("vless://" + "a-31-character-id-aaaaaaaaaaaaa" + "@example.com:443", "FormatException")] // id length 31: too long to derive, too short to be hex
+    public void TryCreate_BadLink_ReturnsFalseWithAReason(string link, string exception)
     {
         Assert.False(Proxy.TryCreate(link, out IProxyClient? client, out string? error));
 
         Assert.Null(client);
         Assert.NotNull(error);
         // The reason has to name the exception type: that is what separates "this link is junk"
-        // from "a parser threw something nobody planned for", which is a library bug.
-        Assert.Contains("Exception", error);
+        // from "a parser threw something nobody planned for", which is a library bug. It has to be
+        // this link's type, too: any name ending in Exception would also let a failed Debug.Assert
+        // through, as "DebugAssertException: ...".
+        Assert.StartsWith(exception + ":", error);
     }
 
     /// <summary>

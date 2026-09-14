@@ -10,14 +10,8 @@ public class FactoryTest
     {
         Uri uri = new Uri(stringUri);
 
-        try
-        {
-            Proxy.Create(uri);
-        }
-        catch (Exception e)
-        {
-            Assert.IsType<NotSupportedException>(e);
-        }
+        // The try and catch this replaces also passed when nothing was thrown.
+        Assert.Throws<NotSupportedException>(() => Proxy.Create(uri));
     }
 
     [Theory]
