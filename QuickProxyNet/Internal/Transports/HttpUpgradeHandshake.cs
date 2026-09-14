@@ -146,41 +146,17 @@ internal static class HttpUpgradeHandshake
             if (colon < 0 || colon != name.Length)
                 continue;
 
-            if (!EqualsIgnoreAsciiCase(line[..colon], name))
+            if (!Ascii.EqualsIgnoreCase(line[..colon], name))
                 continue;
 
-            value = Trim(line[(colon + 1)..]);
+            // Whitespace around a field value is SP and HTAB only (RFC 9110 §5.6.3). Not
+            // Ascii.Trim, which would also strip \v, \f and \r.
+            value = line[(colon + 1)..].Trim(" \t"u8);
             return true;
         }
 
         value = default;
         return false;
-    }
-
-    private static bool EqualsIgnoreAsciiCase(ReadOnlySpan<byte> actual, ReadOnlySpan<byte> lowercase)
-    {
-        for (int i = 0; i < lowercase.Length; i++)
-        {
-            byte c = actual[i];
-            if (c is >= (byte)'A' and <= (byte)'Z')
-                c += 32;
-            if (c != lowercase[i])
-                return false;
-        }
-        return true;
-    }
-
-    private static ReadOnlySpan<byte> Trim(ReadOnlySpan<byte> value)
-    {
-        int start = 0;
-        while (start < value.Length && (value[start] == (byte)' ' || value[start] == (byte)'\t'))
-            start++;
-
-        int end = value.Length;
-        while (end > start && (value[end - 1] == (byte)' ' || value[end - 1] == (byte)'\t'))
-            end--;
-
-        return value[start..end];
     }
 
     /// <summary>
