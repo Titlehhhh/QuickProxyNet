@@ -32,7 +32,9 @@ public class HttpsProxyClient : ProxyClient
 
     public override ProxyType Type => ProxyType.Https;
 
-    private SslClientAuthenticationOptions GetSslClientAuthenticationOptions(string host)
+    // The TLS session is with the proxy, not with the target the tunnel leads to, so the proxy's
+    // name is the one SNI carries and the certificate is checked against.
+    private SslClientAuthenticationOptions GetSslClientAuthenticationOptions()
     {
         return new SslClientAuthenticationOptions
         {
@@ -43,7 +45,7 @@ public class HttpsProxyClient : ProxyClient
             CipherSuitesPolicy = SslCipherSuitesPolicy,
             ClientCertificates = ClientCertificates,
             EnabledSslProtocols = SslProtocols,
-            TargetHost = host
+            TargetHost = ProxyHost
         };
     }
 
@@ -57,7 +59,7 @@ public class HttpsProxyClient : ProxyClient
         try
         {
             await TlsHandshake.AuthenticateAsync(
-                ssl, GetSslClientAuthenticationOptions(host), $"{ProxyHost}:{ProxyPort}", cancellationToken);
+                ssl, GetSslClientAuthenticationOptions(), $"{ProxyHost}:{ProxyPort}", cancellationToken);
         }
         catch
         {
