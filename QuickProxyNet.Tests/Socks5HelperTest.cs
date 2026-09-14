@@ -143,6 +143,51 @@ public class Socks5HelperTest
         Assert.Equal(ProxyErrorCode.ConnectionFailed, ex.ErrorCode);
     }
 
+    // ArrayPool rounds the 513-byte request buffer up to 1024, so a string of 256 to about 1000
+    // UTF-8 bytes fits the buffer but not the one-byte length field. It used to escape as a raw
+    // OverflowException, outside ConnectAsync's exception contract.
+    [Theory]
+    [InlineData(256)]
+    [InlineData(600)]
+    [InlineData(2000)]
+    public async Task Socks5_UsernameOver255Bytes_IsSocksStringTooLong(int length)
+    {
+        var stream = new FakeProxyStream([5, 2]);
+        var creds = new NetworkCredential(new string('u', length), "pass");
+
+        var ex = await Assert.ThrowsAsync<ProxyProtocolException>(
+            () => SocksHelper.EstablishSocks5TunnelAsync(stream, "example.com", 443, creds, CancellationToken.None)
+                .AsTask());
+
+        Assert.Equal(ProxyErrorCode.SocksStringTooLong, ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Socks5_HostUnder255CharsButOver255Bytes_IsSocksStringTooLong()
+    {
+        // 200 Cyrillic letters pass the 255-character argument check and encode to 400 bytes.
+        var stream = new FakeProxyStream([5, 0]);
+
+        var ex = await Assert.ThrowsAsync<ProxyProtocolException>(
+            () => SocksHelper.EstablishSocks5TunnelAsync(stream, new string('ж', 200), 443, null, CancellationToken.None)
+                .AsTask());
+
+        Assert.Equal(ProxyErrorCode.SocksStringTooLong, ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Socks4_UserIdOver255Bytes_IsSocksStringTooLong()
+    {
+        var stream = new FakeProxyStream([]);
+        var creds = new NetworkCredential(new string('u', 300), "");
+
+        var ex = await Assert.ThrowsAsync<ProxyProtocolException>(
+            () => SocksHelper.EstablishSocks4TunnelAsync(stream, false, "127.0.0.1", 443, creds, CancellationToken.None)
+                .AsTask());
+
+        Assert.Equal(ProxyErrorCode.SocksStringTooLong, ex.ErrorCode);
+    }
+
     [Fact]
     public async Task Socks5_WrongVersion_Throws()
     {

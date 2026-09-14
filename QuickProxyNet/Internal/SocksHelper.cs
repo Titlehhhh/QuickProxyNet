@@ -172,7 +172,8 @@ internal static class SocksHelper
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buffer);
+            // The request held the username and password (SOCKS5) or the user id (SOCKS4).
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: credentials is not null);
         }
     }
 
@@ -279,21 +280,21 @@ internal static class SocksHelper
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buffer);
+            // The request held the username and password (SOCKS5) or the user id (SOCKS4).
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: credentials is not null);
         }
     }
 
     private static byte EncodeString(ReadOnlySpan<char> chars, Span<byte> buffer, string parameterName)
     {
-        try
-        {
-            return checked((byte)Encoding.UTF8.GetBytes(chars, buffer));
-        }
-        catch (ArgumentException)
-        {
-            Debug.Assert(Encoding.UTF8.GetByteCount(chars) > 255);
-            throw new ProxyProtocolException(ProxyErrorCode.SocksStringTooLong, $"Encoding the {parameterName} took more than the maximum of 255 bytes");
-        }
+        // The length goes out as a single byte, so the write is capped at 255 whatever room the
+        // rented buffer has. ArrayPool rounds 513 up to 1024, and a string that fit the buffer but
+        // not the length byte used to escape ConnectAsync as an OverflowException from the cast.
+        if (!Encoding.UTF8.TryGetBytes(chars, buffer[..Math.Min(buffer.Length, 255)], out int written))
+            throw new ProxyProtocolException(ProxyErrorCode.SocksStringTooLong,
+                $"Encoding the {parameterName} took more than the maximum of 255 bytes");
+
+        return (byte)written;
     }
 
     private static void VerifyProtocolVersion(byte expected, byte version)
@@ -304,4 +305,4 @@ internal static class SocksHelper
     }
 
 
-}
+}
