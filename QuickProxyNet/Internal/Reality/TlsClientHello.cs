@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -46,6 +47,88 @@ internal static class TlsClientHello
     /// <param name="PrivateKey">The X25519 private key offered in <c>key_share</c>.</param>
     /// <param name="PublicKey">The matching public key.</param>
     internal readonly record struct Result(byte[] Handshake, byte[] PrivateKey, byte[] PublicKey);
+
+    /// <summary>The longest server name a hello carries, counted in the ASCII form SNI sends.</summary>
+    /// <remarks>
+    /// <para>
+    /// A DNS name is at most 253 characters without its trailing dot. The three bounds here exist
+    /// because the hello is written as one TLS record of at most 16 384 bytes, and a configuration
+    /// past them used to fail only once the TCP connection was open, as an exception
+    /// <c>ConnectAsync</c> may not throw.
+    /// </para>
+    /// <para>
+    /// At all three maxima the hello is about 4.5 KB: the fixed fields and extensions, 253 bytes of
+    /// name, and 16 protocols of 1 + 255 bytes. The rest of the record is room for the browser
+    /// fingerprint this hello does not have yet; Chrome's hello is about 1.7 KB, most of it the
+    /// X25519MLKEM768 key share. <c>VlessTest</c> builds a hello at the maxima and writes it as a
+    /// record, so a fingerprint that outgrows the room fails there.
+    /// </para>
+    /// </remarks>
+    internal const int MaxServerNameLength = 253;
+
+    /// <summary>The most ALPN protocols a hello offers. See <see cref="MaxServerNameLength"/>.</summary>
+    internal const int MaxAlpnProtocols = 16;
+
+    /// <summary>
+    /// The longest ALPN protocol name in bytes of UTF-8: RFC 7301 gives it a one-byte length, and
+    /// <see cref="System.Net.Security.SslApplicationProtocol"/> refuses anything longer.
+    /// </summary>
+    internal const int MaxAlpnProtocolLength = 255;
+
+    /// <summary>
+    /// Checks a server name and an ALPN list against what a hello can carry, so that a configuration
+    /// is refused where it enters, not when the hello is written.
+    /// </summary>
+    /// <param name="serverName">The name SNI will carry, before its conversion to A-labels.</param>
+    /// <param name="alpn">The ALPN protocols, or null for the default list.</param>
+    /// <param name="error">What is wrong, when this returns false.</param>
+    public static bool TryValidate(
+        string serverName, IReadOnlyList<string>? alpn, [NotNullWhen(false)] out string? error)
+    {
+        string aLabel;
+        try
+        {
+            aLabel = ToALabel(serverName);
+        }
+        catch (ArgumentException)
+        {
+            // A name too long to read is described, not repeated.
+            error = serverName.Length <= MaxServerNameLength
+                ? $"The REALITY server name '{serverName}' is not a host name that can be encoded for SNI."
+                : $"The REALITY server name is {serverName.Length} characters; a DNS name is at most {MaxServerNameLength}.";
+            return false;
+        }
+
+        if (aLabel.Length > MaxServerNameLength)
+        {
+            error = $"The REALITY server name is {aLabel.Length} characters in the ASCII form SNI carries; " +
+                    $"a DNS name is at most {MaxServerNameLength}.";
+            return false;
+        }
+
+        if (alpn is not null)
+        {
+            if (alpn.Count > MaxAlpnProtocols)
+            {
+                error = $"A REALITY hello offers at most {MaxAlpnProtocols} ALPN protocols; this configuration has {alpn.Count}.";
+                return false;
+            }
+
+            for (int i = 0; i < alpn.Count; i++)
+            {
+                int length = string.IsNullOrEmpty(alpn[i]) ? 0 : Encoding.UTF8.GetByteCount(alpn[i]);
+                if (length is 0 or > MaxAlpnProtocolLength)
+                {
+                    error = $"An ALPN protocol is 1 to {MaxAlpnProtocolLength} bytes of UTF-8; protocol {i + 1} " +
+                            $"of {alpn.Count} is {length}.";
+                    return false;
+                }
+            }
+        }
+
+        error = null;
+        return true;
+    }
 
     /// <summary>
     /// Builds a ClientHello offering a fresh X25519 <c>key_share</c>.
@@ -242,8 +325,11 @@ internal static class TlsClientHello
         int list = writer.BeginVector16();
         foreach (string protocol in alpn)
         {
+            // UTF-8, which is what SslApplicationProtocol puts on the wire for the same list under
+            // security=tls, and what Go, and so Xray, sends for a string. ASCII turned "hé" into
+            // "h?" without a word, the substitution ToALabel exists to prevent for the name.
             int entry = writer.BeginVector8();
-            writer.Write(Encoding.ASCII.GetBytes(protocol));
+            writer.Write(Encoding.UTF8.GetBytes(protocol));
             writer.EndVector(entry, 1);
         }
 

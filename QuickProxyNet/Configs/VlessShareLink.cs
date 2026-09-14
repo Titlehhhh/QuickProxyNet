@@ -193,6 +193,17 @@ public static class VlessShareLink
             RealityShortId = sid,
             Remark = remark
         };
+
+        // The server name and ALPN list go into a ClientHello written as one TLS record. Past what it
+        // holds, the write failed after the TCP connect with an exception ConnectAsync may not throw,
+        // so a link that could never be sent is refused here.
+        if (security == VlessSecurity.Reality &&
+            !TlsClientHello.TryValidate(options.RealityServerName, options.Alpn, out error))
+        {
+            options = null;
+            return false;
+        }
+
         error = null;
         return true;
     }

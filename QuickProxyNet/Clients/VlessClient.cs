@@ -25,7 +25,7 @@ public sealed class VlessClient : ProxyClient
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
     /// <exception cref="ArgumentException">
     /// The options carry an invalid UUID, or, for REALITY, a public key or short id that cannot be
-    /// decoded.
+    /// decoded, or a server name or ALPN list that a ClientHello cannot carry.
     /// </exception>
     public VlessClient(VlessOptions options)
         : base("vless", (options ?? throw new ArgumentNullException(nameof(options))).Host, options.Port)
@@ -53,6 +53,12 @@ public sealed class VlessClient : ProxyClient
             Span<byte> shortId = stackalloc byte[RealityAuth.ShortIdSize];
             if (!RealityAuth.TryParseShortId(shortId, options.RealityShortId, out string? shortIdError))
                 throw new ArgumentException(shortIdError, nameof(options));
+
+            // The server name and ALPN list too. Past what one TLS record holds, the hello failed to
+            // write after the TCP connect, as an InvalidOperationException or an
+            // ArgumentOutOfRangeException out of ConnectAsync.
+            if (!TlsClientHello.TryValidate(options.RealityServerName, options.Alpn, out string? helloError))
+                throw new ArgumentException(helloError, nameof(options));
         }
 
         Options = options;
@@ -160,7 +166,8 @@ public sealed class VlessClient : ProxyClient
     /// </remarks>
     private RealityTlsOptions BuildRealityOptions() => new()
     {
-        ServerName = Options.Sni ?? Options.HostHeader ?? Options.Host,
+        // Bounded by the constructor, like the ALPN list below.
+        ServerName = Options.RealityServerName,
         // Decoded and length-checked by the constructor; EnsureSupported has already refused a
         // REALITY configuration without a key.
         PublicKey = _realityPublicKey!,

@@ -86,4 +86,14 @@ public sealed class VlessOptions
 
     /// <summary>The resolved transport layer this configuration selects.</summary>
     internal TransportKind TransportKind => ProxyTransport.Resolve(Transport);
+
+    /// <summary>
+    /// The name a REALITY ClientHello carries: <see cref="Sni"/>, else <see cref="HostHeader"/>,
+    /// else <see cref="Host"/>.
+    /// </summary>
+    /// <remarks>
+    /// One property, so the share-link parser and the client constructor check the same name the
+    /// handshake sends, whichever field it comes from.
+    /// </remarks>
+    internal string RealityServerName => Sni ?? HostHeader ?? Host;
 }
