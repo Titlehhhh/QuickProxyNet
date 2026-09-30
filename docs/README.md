@@ -11,6 +11,7 @@ Wire-level заметки по протоколам:
 - [VLESS](vless.md) — реализован
 - [VMess](vmess.md), [VMessAEAD request](vmess-aead-request.md), [VMessAEAD body](vmess-aead-body.md) — реализован
 - [Trojan](trojan.md) — реализован
+- [Shadowsocks](shadowsocks.md) — реализован AEAD поверх TCP
 - [Hysteria2](hysteria2.md), [hy2](hy2.md), [TUIC](tuic.md) — **не реализованы**
 - [Анализ QUIC-протоколов](quic-protocols-analysis.md) — почему Hysteria2 и TUIC
   не ложатся на модель «один `ConnectAsync` — один сокет»

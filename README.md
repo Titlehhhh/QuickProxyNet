@@ -72,6 +72,23 @@ using var http = new HttpClient(new SocketsHttpHandler
 });
 ```
 
+### Many links at once
+
+`Proxy.TryCreate` never throws, whatever the input. A subscription is other people's text, and one bad line must not stop the run. The `error` string starts with the exception type, so you can group the refusals.
+
+```csharp
+foreach (var line in File.ReadLines("subscription.txt"))
+{
+    if (!Proxy.TryCreate(line, out var client, out var error))
+    {
+        Console.WriteLine($"skipped: {error}");
+        continue;
+    }
+
+    // client.SourceLink is the original text, with the uuid, sni and transport
+}
+```
+
 ### With explicit proxy type and credentials
 
 ```csharp
@@ -220,6 +237,9 @@ messages never contain the credential: a malformed user id is reported by length
 | `SocksIPv6NotSupported` | SOCKS4 does not support IPv6 |
 | `SocksNoIPv4Address` | Failed to resolve host to IPv4 (SOCKS4) |
 | `SocksStringTooLong` | SOCKS field exceeded 255-byte limit |
+| `StringTooLong` | A protocol string field, such as a target host name, exceeded the 255-byte limit |
+| `TransportUpgradeFailed` | The server refused the `ws` or `httpupgrade` upgrade, or did not answer with a WebSocket handshake |
+| `TlsHandshakeFailed` | The TLS handshake with the proxy failed: an untrusted or expired certificate, a name the server does not serve, or no shared cipher suite |
 
 ## Supported Proxy Types
 
