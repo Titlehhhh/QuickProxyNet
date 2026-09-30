@@ -28,8 +28,9 @@ namespace QuickProxyNet;
 /// </description></item>
 /// </list>
 /// <para>
-/// A payload containing <c>@</c> selects the second grammar; that character occurs in
-/// neither base64 alphabet, so the choice is unambiguous.
+/// A payload containing <c>@</c> before any <c>#</c> selects the second grammar; that
+/// character occurs in neither base64 alphabet, so the choice is unambiguous. After the
+/// <c>#</c> it is part of the remark.
 /// </para>
 /// <para>
 /// Recognized JSON fields: <c>add</c>, <c>port</c>, <c>id</c>, <c>aid</c>/<c>alterId</c>,
@@ -98,16 +99,17 @@ public static class VmessShareLink
             return false;
         }
 
-        // Two grammars exist in the wild. Neither base64 alphabet contains '@', so its
-        // presence unambiguously means the standard URI form.
-        if (payload.IndexOf('@') >= 0)
+        // Two grammars exist in the wild. Neither base64 alphabet contains '@', so its presence
+        // before any '#fragment' unambiguously means the standard URI form. Only before it: a
+        // remark after the base64 is free text, and "@channel" tags there are common.
+        int hash = payload.IndexOf('#');
+        if ((hash >= 0 ? payload[..hash] : payload).IndexOf('@') >= 0)
             return TryParseStandardUri(link.ToString(), out options, out error);
 
         // v2rayN base64-JSON. Producers routinely append the remark as a '#fragment'
         // *after* the base64, which then fails to decode. '#' is not in either alphabet
         // either, so everything from it onwards is the remark, not payload.
         string? fragmentRemark = null;
-        int hash = payload.IndexOf('#');
         if (hash >= 0)
         {
             ReadOnlySpan<char> fragment = payload[(hash + 1)..];
@@ -338,6 +340,15 @@ public static class VmessShareLink
                 ? Uri.UnescapeDataString(uri.Fragment[1..])
                 : null
         };
+
+        // The path and the Host header go into the HTTP upgrade request as they are, and %0D%0A in
+        // path=, host= or sni= decodes to a CR LF that ended a line of it.
+        if (!ProxyTransport.TryValidateRequest(options.TransportKind, options.Path, options.TransportHostHeader, out error))
+        {
+            options = null;
+            return false;
+        }
+
         error = null;
         return true;
     }
@@ -383,15 +394,17 @@ public static class VmessShareLink
         => value.IndexOf('%') < 0 ? value.ToString() : Uri.UnescapeDataString(value.ToString());
 
     /// <summary>
-    /// Decodes a payload that uses the URL-safe alphabet and/or omits its padding.
+    /// Decodes a payload the fast path refused: the URL-safe alphabet, missing padding, or unused
+    /// trailing bits left set, which .NET 11 rejects where .NET 10 and Go accept them.
     /// </summary>
     private static bool TryDecodeRelaxed(ReadOnlySpan<char> payload, Span<byte> destination, out int length)
     {
         // Padding may add up to 3 characters to the normalized form.
         char[] chars = ArrayPool<char>.Shared.Rent(payload.Length + 3);
+        int charCount = 0;
         try
         {
-            if (!TryNormalizeBase64(payload, chars, out int charCount))
+            if (!ShareLinkBase64.TryNormalize(payload, chars, out charCount))
             {
                 length = 0;
                 return false;
@@ -401,46 +414,10 @@ public static class VmessShareLink
         }
         finally
         {
+            // The JSON inside carries the user id.
+            Array.Clear(chars, 0, charCount);
             ArrayPool<char>.Shared.Return(chars);
         }
-    }
-
-    /// <summary>
-    /// Copies <paramref name="payload"/> into <paramref name="destination"/>, translating
-    /// the URL-safe alphabet to the standard one, dropping whitespace, and appending the
-    /// <c>=</c> padding <see cref="Convert.TryFromBase64Chars"/> requires.
-    /// </summary>
-    private static bool TryNormalizeBase64(
-        ReadOnlySpan<char> payload, Span<char> destination, out int length)
-    {
-        length = 0;
-
-        for (int i = 0; i < payload.Length; i++)
-        {
-            char c = payload[i];
-            if (char.IsWhiteSpace(c))
-                continue;
-
-            destination[length++] = c switch
-            {
-                '-' => '+',
-                '_' => '/',
-                _ => c
-            };
-        }
-
-        // Trailing padding may already be present; only top it up to a 4-character group.
-        int remainder = length % 4;
-        if (remainder == 1)
-            return false; // no base64 string can have this length
-
-        if (remainder != 0)
-        {
-            for (int i = remainder; i < 4; i++)
-                destination[length++] = '=';
-        }
-
-        return length > 0;
     }
 
     private static bool TryParseJson(
@@ -540,6 +517,16 @@ public static class VmessShareLink
                 return false;
             }
 
+            // Uri refuses such a host in every other grammar, but a JSON string holds anything, and
+            // a NUL in it cut the name short at the resolver.
+            int badHost = ProxyClient.IndexOfSpaceOrControl(host);
+            if (badHost >= 0)
+            {
+                error = "VMess share link server address cannot contain a space or an ASCII control character; " +
+                        $"this one has U+{(int)host[badHost]:X4} at index {badHost}.";
+                return false;
+            }
+
             if (GetInt32(portField, out int port) != FieldState.Ok || port <= 0 || port > 65535)
             {
                 error = "VMess share link is missing a valid server port.";
@@ -607,6 +594,13 @@ public static class VmessShareLink
             if (string.IsNullOrEmpty(sni))
                 sni = host;
 
+            // 'ps' is authoritative; the '#fragment' form is the fallback for producers that
+            // append the remark after the base64 instead of putting it in the JSON. An empty 'ps'
+            // counts as absent: those same producers write "ps":"" and put the name in the fragment.
+            string? remark = GetString(psField);
+            if (string.IsNullOrEmpty(remark) && fragmentRemark is not null)
+                remark = fragmentRemark;
+
             options = new VmessOptions
             {
                 Id = id,
@@ -621,10 +615,17 @@ public static class VmessShareLink
                 Path = GetString(pathField),
                 HostHeader = GetString(hostField),
                 AllowInsecure = GetBoolean(allowInsecureField) || GetBoolean(skipCertVerifyField),
-                // 'ps' is authoritative; the '#fragment' form is the fallback for producers
-                // that append the remark after the base64 instead of putting it in the JSON.
-                Remark = GetString(psField) ?? fragmentRemark
+                Remark = remark
             };
+
+            // The path and the Host header go into the HTTP upgrade request as they are, and a JSON
+            // string can hold the CR LF that ended a line of it.
+            if (!ProxyTransport.TryValidateRequest(options.TransportKind, options.Path, options.TransportHostHeader, out error))
+            {
+                options = null;
+                return false;
+            }
+
             error = null;
             return true;
         }

@@ -1,6 +1,6 @@
 # QuickProxyNet
 
-High-performance, zero-dependency C# library for connecting through HTTP, HTTPS, SOCKS4, SOCKS4a and SOCKS5 proxies, and through the VPN-style protocols VLESS, VMess and Trojan. Returns a raw `Stream` for direct data access.
+High-performance, zero-dependency C# library for connecting through HTTP, HTTPS, SOCKS4, SOCKS4a and SOCKS5 proxies, and through the VPN-style protocols VLESS, VMess, Trojan and Shadowsocks. Returns a raw `Stream` for direct data access.
 
 VLESS REALITY works in-process — the TLS 1.3 handshake it needs is implemented here (including the `xtls-rprx-vision` flow), so it costs no extra package and no external binary, and the zero-dependency promise still holds. Its ClientHello is not yet a browser fingerprint; see `docs/reality-fingerprint-plan.md` in the repository for what that means.
 
@@ -13,18 +13,11 @@ No companion package and no external binary are involved. The `grpc` and `xhttp`
 `Proxy.ConnectAsync` takes the share link as a string and dispatches on the scheme itself — including `vmess://` links, whose base64 payload `System.Uri` cannot parse.
 
 ```csharp
-// Works for http/https/socks4/socks4a/socks5/vless/trojan/vmess links
+// Works for http/https/socks4/socks4a/socks5/vless/trojan/vmess/ss links
 await using var stream = await Proxy.ConnectAsync(
     "socks5://user:pass@127.0.0.1:1080",
     "example.com", 443,
     TimeSpan.FromSeconds(5));
-```
-
-Or via extension method:
-
-```csharp
-await using var stream = await new Uri("http://proxy:8080")
-    .ConnectThroughProxyAsync("example.com", 443);
 ```
 
 ## Features
@@ -34,7 +27,9 @@ await using var stream = await new Uri("http://proxy:8080")
 - VLESS REALITY and `xtls-rprx-vision` in-process, no Xray binary
 - Structured errors: `ProxyProtocolException` with `ProxyErrorCode` enum
 - Per-connection timeouts with `ProxyErrorCode.Timeout`
-- Static API (`Proxy.ConnectAsync`) and factory API (`ProxyClientFactory.Instance.Create(link)`)
+- Static API (`Proxy.ConnectAsync`) and factory API (`Proxy.Create(link)`)
+- `Proxy.TryCreate(link, out client, out error)` for subscriptions: it never throws and tells why a link was refused
+- Target as a `DnsEndPoint` or `IPEndPoint`, so `SocketsHttpHandler.ConnectCallback` can send an `HttpClient` through any supported proxy
 
 ## Error Handling
 

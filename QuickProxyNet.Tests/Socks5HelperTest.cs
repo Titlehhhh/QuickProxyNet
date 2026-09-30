@@ -143,6 +143,181 @@ public class Socks5HelperTest
         Assert.Equal(ProxyErrorCode.ConnectionFailed, ex.ErrorCode);
     }
 
+    // ArrayPool rounds the 520-byte request buffer up to 1024, so a string of 256 to about 1000
+    // UTF-8 bytes fits the buffer but not the one-byte length field. It used to escape as a raw
+    // OverflowException, outside ConnectAsync's exception contract.
+    [Theory]
+    [InlineData(256)]
+    [InlineData(600)]
+    [InlineData(2000)]
+    public async Task Socks5_UsernameOver255Bytes_IsSocksStringTooLong(int length)
+    {
+        var stream = new FakeProxyStream([5, 2]);
+        var creds = new NetworkCredential(new string('u', length), "pass");
+
+        var ex = await Assert.ThrowsAsync<ProxyProtocolException>(
+            () => SocksHelper.EstablishSocks5TunnelAsync(stream, "example.com", 443, creds, CancellationToken.None)
+                .AsTask());
+
+        Assert.Equal(ProxyErrorCode.SocksStringTooLong, ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Socks5_HostUnder255CharsButOver255Bytes_IsSocksStringTooLong()
+    {
+        // 200 Cyrillic letters pass the 255-character argument check and encode to 400 bytes.
+        var stream = new FakeProxyStream([5, 0]);
+
+        var ex = await Assert.ThrowsAsync<ProxyProtocolException>(
+            () => SocksHelper.EstablishSocks5TunnelAsync(stream, new string('ж', 200), 443, null, CancellationToken.None)
+                .AsTask());
+
+        Assert.Equal(ProxyErrorCode.SocksStringTooLong, ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Socks4_UserIdOver255Bytes_IsSocksStringTooLong()
+    {
+        var stream = new FakeProxyStream([]);
+        var creds = new NetworkCredential(new string('u', 300), "");
+
+        var ex = await Assert.ThrowsAsync<ProxyProtocolException>(
+            () => SocksHelper.EstablishSocks4TunnelAsync(stream, false, "127.0.0.1", 443, creds, CancellationToken.None)
+                .AsTask());
+
+        Assert.Equal(ProxyErrorCode.SocksStringTooLong, ex.ErrorCode);
+    }
+
+    /// <summary>
+    /// SOCKS4a ends its host at the first NUL, so a host carrying one put everything after the NUL
+    /// on the wire as tunnel data, as though the caller had written it there.
+    /// </summary>
+    [Fact]
+    public async Task Socks4a_NulInTargetHost_IsRefusedBeforeWriting()
+    {
+        var stream = new FakeProxyStream([0, 90, 0, 0, 0, 0, 0, 0]);
+        var client = new Socks4aClient("proxy.example", 1080);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.ConnectAsync(stream, "good.example\0GET /admin HTTP/1.1\r\n\r\n", 443).AsTask());
+
+        Assert.Equal("host", ex.ParamName);
+        Assert.Empty(stream.WrittenBytes);
+    }
+
+    /// <summary>
+    /// The user id is NUL-terminated too. <c>alice\0evil.example</c> as the user id of a SOCKS4a
+    /// request for good.example reached the server as user alice and host evil.example, a target
+    /// the caller never named. It is refused where the credential enters, from a constructor or a
+    /// link, and no message repeats it.
+    /// </summary>
+    [Fact]
+    public void Socks4_NulInUserId_IsRefusedWhereTheCredentialEnters()
+    {
+        const string userId = "alice\0evil.example";
+
+        Exception[] refusals =
+        [
+            Assert.Throws<ArgumentException>(() =>
+                new Socks4aClient("proxy.example", 1080, new NetworkCredential(userId, ""))),
+            Assert.Throws<ArgumentException>(() =>
+                new Socks4Client("proxy.example", 1080, new NetworkCredential(userId, ""))),
+            Assert.Throws<ArgumentException>(() => Proxy.Create("socks4a://alice%00evil.example@127.0.0.1:1080")),
+            Assert.Throws<ArgumentException>(() => Proxy.Create("socks4://alice%00evil.example@127.0.0.1:1080")),
+        ];
+
+        foreach (Exception refusal in refusals)
+        {
+            Assert.Contains("NUL", refusal.Message);
+            for (Exception? e = refusal; e is not null; e = e.InnerException)
+            {
+                Assert.DoesNotContain("alice", e.Message);
+                Assert.DoesNotContain("evil", e.Message);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Socks4a_UserIdGivenANulAfterConstruction_IsRefusedBeforeWriting()
+    {
+        // NetworkCredential is mutable, so the constructor's check alone cannot keep a NUL off the wire.
+        var credentials = new NetworkCredential("alice", "");
+        var client = new Socks4aClient("proxy.example", 1080, credentials);
+        credentials.UserName = "alice\0evil.example";
+        var stream = new FakeProxyStream([0, 90, 0, 0, 0, 0, 0, 0]);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.ConnectAsync(stream, "good.example", 443).AsTask());
+
+        Assert.DoesNotContain("alice", ex.Message);
+        Assert.Empty(stream.WrittenBytes);
+    }
+
+    /// <summary>
+    /// The request buffer must hold the largest message the helper writes. It was sized for the
+    /// SOCKS5 username and password message, 513 bytes, while a SOCKS4a request carrying a
+    /// 255-byte user id and a 255-byte host is 520. Nothing failed only because ArrayPool hands
+    /// out 1024 bytes for either size, which is also why the size is checked here directly.
+    /// </summary>
+    [Fact]
+    public async Task BufferSize_HoldsTheLargestMessageTheHelperWrites()
+    {
+        string longest = new('x', 255);
+        byte[] longestBytes = Encoding.ASCII.GetBytes(longest);
+
+        var socks4a = new WriteRecordingStream([0, 90, 0, 0, 0, 0, 0, 0]);
+        await SocksHelper.EstablishSocks4TunnelAsync(socks4a, true, longest, 443,
+            new NetworkCredential(longest, ""), CancellationToken.None);
+
+        byte[] request = [4, 1, 443 >> 8, 443 & 0xFF, 0, 0, 0, 255, .. longestBytes, 0, .. longestBytes, 0];
+        Assert.Equal(request, socks4a.Written);
+
+        var socks5 = new WriteRecordingStream([5, 2, 1, 0, 5, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+        await SocksHelper.EstablishSocks5TunnelAsync(socks5, longest, 443,
+            new NetworkCredential(longest, longest), CancellationToken.None);
+
+        Assert.Equal(520, socks4a.LargestWrite);
+        Assert.Equal(513, socks5.LargestWrite);
+        Assert.Equal(SocksHelper.BufferSize, Math.Max(socks4a.LargestWrite, socks5.LargestWrite));
+    }
+
+    /// <summary>Replays a scripted reply, and records what was written and the largest single write.</summary>
+    private sealed class WriteRecordingStream(byte[] reply) : Stream
+    {
+        private readonly MemoryStream _reply = new(reply);
+        private readonly MemoryStream _written = new();
+
+        public byte[] Written => _written.ToArray();
+
+        public int LargestWrite { get; private set; }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override int Read(byte[] buffer, int offset, int count) => _reply.Read(buffer, offset, count);
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) =>
+            _reply.ReadAsync(buffer, ct);
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            LargestWrite = Math.Max(LargestWrite, count);
+            _written.Write(buffer, offset, count);
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default)
+        {
+            LargestWrite = Math.Max(LargestWrite, buffer.Length);
+            return _written.WriteAsync(buffer, ct);
+        }
+    }
+
     [Fact]
     public async Task Socks5_WrongVersion_Throws()
     {

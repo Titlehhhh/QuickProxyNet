@@ -10,16 +10,8 @@ public class FactoryTest
     {
         Uri uri = new Uri(stringUri);
 
-        ProxyClientFactory factory = new ProxyClientFactory();
-
-        try
-        {
-            factory.Create(uri);
-        }
-        catch (Exception e)
-        {
-            Assert.IsType<NotSupportedException>(e);
-        }
+        // The try and catch this replaces also passed when nothing was thrown.
+        Assert.Throws<NotSupportedException>(() => Proxy.Create(uri));
     }
 
     [Theory]
@@ -32,10 +24,7 @@ public class FactoryTest
     {
         Uri uri = new Uri(stringUri);
 
-
-        ProxyClientFactory factory = new ProxyClientFactory();
-
-        IProxyClient client = factory.Create(uri);
+        IProxyClient client = Proxy.Create(uri);
 
 
         Assert.Equal(client.Type.ToString().ToLower(), uri.Scheme.ToLower());
@@ -54,10 +43,7 @@ public class FactoryTest
     {
         Uri uri = new Uri(stringUri);
 
-
-        ProxyClientFactory factory = new ProxyClientFactory();
-
-        IProxyClient client = factory.Create(uri);
+        IProxyClient client = Proxy.Create(uri);
 
 
         Assert.Equal(client.Type.ToString().ToLower(), uri.Scheme.ToLower());

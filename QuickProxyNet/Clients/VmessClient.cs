@@ -58,7 +58,9 @@ public sealed class VmessClient : ProxyClient
     /// <summary>Creates a VMess client from strongly-typed options.</summary>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
     /// <exception cref="ArgumentException">
-    /// The options carry an invalid UUID or a non-zero <see cref="VmessOptions.AlterId"/>.
+    /// The options carry an invalid UUID or a non-zero <see cref="VmessOptions.AlterId"/>; or, for
+    /// <c>ws</c> and <c>httpupgrade</c>, an ASCII control character in the path or the Host header;
+    /// or a proxy host with a space or an ASCII control character.
     /// </exception>
     public VmessClient(VmessOptions options)
         : base("vmess", (options ?? throw new ArgumentNullException(nameof(options))).Host, options.Port)
@@ -80,6 +82,11 @@ public sealed class VmessClient : ProxyClient
                 $"VMess alterId {options.AlterId} is not supported: only alterId 0 (VMessAEAD) is " +
                 "implemented, and a non-zero value selects the legacy MD5 authentication format.",
                 nameof(options));
+
+        // A CR LF in the path or the Host header used to go into the HTTP upgrade request as it was.
+        if (!ProxyTransport.TryValidateRequest(
+                options.TransportKind, options.Path, options.TransportHostHeader, out string? requestError))
+            throw new ArgumentException(requestError, nameof(options));
 
         Options = options;
         _alpn = BuildAlpn(options.Alpn);
@@ -122,6 +129,7 @@ public sealed class VmessClient : ProxyClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
+        ValidateArguments(host, port);
 
         // Reject unsupported transports and ciphers before writing any bytes or starting TLS.
         VmessSecurity security = EnsureSupported(out TransportKind transportKind);
@@ -136,14 +144,15 @@ public sealed class VmessClient : ProxyClient
                 // SslStream(leaveInnerStreamOpen:false) disposes the inner stream too.
                 var ssl = new SslStream(layered, leaveInnerStreamOpen: false);
                 layered = ssl;
-                await ssl.AuthenticateAsClientAsync(BuildSslOptions(), cancellationToken).ConfigureAwait(false);
+                await TlsHandshake.AuthenticateAsync(
+                    ssl, BuildSslOptions(), Options.ServerName, cancellationToken).ConfigureAwait(false);
             }
 
             layered = await ProxyTransport.ApplyAsync(
                 transportKind,
                 layered,
                 Options.Path,
-                ProxyTransport.ResolveHostHeader(Options.HostHeader, Options.Sni, Options.Host),
+                Options.TransportHostHeader,
                 cancellationToken).ConfigureAwait(false);
         }
         catch
@@ -269,9 +278,9 @@ public sealed class VmessClient : ProxyClient
 
     private SslClientAuthenticationOptions BuildSslOptions() => new()
     {
-        // Same precedence Xray applies: explicit SNI, else the transport Host header, else the
-        // server address. A ws+tls node commonly sets only 'host'.
-        TargetHost = Options.Sni ?? Options.HostHeader ?? Options.Host,
+        // Explicit SNI, else the transport Host header, else the server address, an empty one
+        // counting as absent (see TlsHandshake.ResolveServerName).
+        TargetHost = Options.ServerName,
         EnabledSslProtocols = SslProtocols,
         RemoteCertificateValidationCallback = Options.AllowInsecure
             ? static (_, _, _, _) => true

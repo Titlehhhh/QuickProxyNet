@@ -34,14 +34,25 @@ hand-run diagnostic, and keeping it out of the solution keeps it out of CI.
 
 All public library types live in the `QuickProxyNet` namespace.
 
-- `Proxy` exposes static one-call `ConnectAsync(...)` helpers.
-- `ProxyUriExtensions` adds `Uri.ConnectThroughProxyAsync(...)`.
+- `Proxy` is the static entry point: one-call `ConnectAsync(...)` helpers, plus
+  `Create(...)` / `TryCreate(...)` building a client from a share-link `string`,
+  from a `Uri`, or from explicit proxy settings.
+- There are no `Uri` connect overloads and no `IProxyClient.ProxyUri` (removed in
+  5.0.0). A `Uri` cannot hold most `vmess://` links, keeps nothing but host and port
+  for the other VPN-style families, and could not even hold a password containing
+  `@`. `Proxy.Create(Uri)` stays as an adapter for `WebProxy.Address` and
+  `IWebProxy.GetProxy`; `ProxyClient.ToString()` is `scheme://host:port` for logs.
+- There is no `IProxyClient.ReadTimeout` / `WriteTimeout` (removed in 5.0.0). They were
+  copied to `Socket.ReceiveTimeout` / `SendTimeout`, which bind only synchronous calls, so
+  they never applied to a handshake. Do not bring them back: the `TimeSpan` overloads of
+  `ConnectAsync` bound the handshake, and a caller bounds reads on the returned stream.
 - `IProxyClient` is the client contract; connection methods return
-  `ValueTask<Stream>`.
+  `ValueTask<Stream>`. `SourceLink` carries the text the client was built from.
+  A target is `host, port` or an `EndPoint` (`DnsEndPoint` / `IPEndPoint`); the
+  `EndPoint` overloads are default interface members that forward to the
+  host-and-port ones, so an implementation outside `ProxyClient` gets them free.
 - `ProxyClient` owns common socket setup, timeout handling, and argument
   validation.
-- `ProxyClientFactory` creates clients from a share-link `string`, from a `Uri`,
-  or from explicit proxy settings.
 - `ProxyProtocolException` carries a structured `ProxyErrorCode`.
 - `VlessOptions` / `TrojanOptions` / `VmessOptions` plus the matching
   `*ShareLink.Parse` / `TryParse` describe a VPN-style endpoint.
@@ -141,12 +152,25 @@ independent:
   transcribed from `XTLS/REALITY`'s `tls.go`.
 - `HostilePeerTest` — a scripted malformed or hostile peer, in memory. This is the
   only suite that can reach the failure modes a cooperating server never produces.
+  Its `KeyedServer` derives real keys and a certificate bound to the REALITY auth key,
+  which is what reaches the checks after the ServerHello. Its unbent flight is a test
+  of its own, so a refusal there cannot be a mistake in the peer.
 - `Integration/Managed*` — real handshakes and real tunnels against Xray-core, with
   a REALITY server whose `dest` points at a decoy TLS inbound in the same process, so
   nothing leaves the machine.
 
+**Strict where Go's client is strict.** The server side is Go's crypto/tls, so leniency
+Go's client does not have buys nothing. Application data before the server's Finished is
+refused, not buffered for the stream (RFC 8446 §2; Go's `readRecordOrCCS` sends
+`unexpected_message` while the handshake is incomplete, even for an empty record). Handshake
+bytes still buffered when the read keys change — after the ServerHello and after the
+Finished — are refused (RFC 8446 §5.1; Go's `setReadTrafficSecret`). A server's first
+application data comes under its application keys, possibly in the same transport read as
+its flight. That is safe because the record layer decrypts a record only when it is asked
+for one, by which point the application keys are in place.
+
 **Public shape, decided:** REALITY is reached through `VlessClient` — `security=reality`
-in `VlessOptions`, or simply the share link via `ProxyClientFactory.Create(string)`.
+in `VlessOptions`, or simply the share link via `Proxy.Create(string)`.
 Nothing under `Internal/Reality/` is public except `RealityHandshakeException`, which is a
 `ProxyProtocolException` so existing `catch` blocks see it. A separate `RealityClient` or a
 third package were considered and rejected: a user holds a `vless://` link, and the link
@@ -213,7 +237,7 @@ not "clean up" any of them without reading the reasoning first.
 
 8. **`vmess://` links generally cannot be `System.Uri` values.** The base64 JSON
    payload exceeds `Uri`'s host-length limit and contains `=` padding. Use
-   `ProxyClientFactory.Create(string)`, `VmessClient.FromShareLink(string)` or
+   `Proxy.Create(string)`, `VmessClient.FromShareLink(string)` or
    `VmessShareLink.Parse(string)` — all of which operate on the raw string.
 
 9. **Non-UUID user ids are real and must be derived, not rejected.** Xray's
@@ -297,7 +321,36 @@ not "clean up" any of them without reading the reasoning first.
     opaque launch error rather than as anything about transports. A share link
     combining the two describes something no server can serve; reject it by name.
 
-18. **Xray's own SOCKS inbound stalls above roughly one TLS record.** A request of
+18. **`ConnectAsync` throws exactly three kinds of exception, and that is a contract.**
+    `ProxyProtocolException` for everything that can go wrong on the wire,
+    `NotSupportedException` for a link describing something this library cannot speak,
+    and the `ArgumentException` family for a caller's own mistake. Callers written
+    against it catch the first and let the other two crash the process, which is right:
+    one is a dead node, the others are a bug in the calling code.
+
+    Stopping an attempt is not a failure and has its own shape. The caller's own
+    cancellation is `OperationCanceledException` carrying the caller's token, in every
+    phase; before 5.0.0 the TCP connect reported it as `ConnectionFailed` and the
+    handshake threw it bare. A timeout is `ProxyErrorCode.Timeout` and never an
+    `OperationCanceledException`. Both run through one linked token source, checked
+    caller-first, because the caller's cancellation cancels the linked source too.
+
+    Two paths used to break it, and both were invisible from inside the library —
+    it took a checker running the public API over thousands of real nodes to see them.
+    `CreateSocket()` sat *outside* the guarded region in both overloads, so a bind
+    failure or handle exhaustion escaped as a raw `SocketException`. And
+    `AuthenticationException` derives from `SystemException`, not `IOException`, so it
+    slipped past the `ex is IOException or SocketException` guard — meaning an expired
+    certificate or an unservable SNI, the most common way a TLS-carried node dies, was
+    never reported as a proxy error at all. `TlsHandshake.AuthenticateAsync` now owns
+    every client-side handshake so there is one place for that translation.
+
+    The lesson generalises: a leak in an exception contract cannot be seen by the tests
+    that assert on the happy path, and cannot be seen by a caller that catches
+    `Exception`. It shows up only where something classifies failures and has a bucket
+    labelled "unrecognised" that starts filling up.
+
+19. **Xray's own SOCKS inbound stalls above roughly one TLS record.** A request of
     16 000 bytes round-trips; 16 500 hangs until the client gives up, with no error
     logged by either process. Not ours, and worth remembering before spending an
     afternoon on it again: `LargeRequestDiagnosticTests` isolates it by carrying
@@ -365,6 +418,16 @@ xunit.runner.visualstudio 3.0.0), so v2 reports the throw as a plain **failure**
 with the raw token in the message. Discovery-time `FactAttribute.Skip` is the
 mechanism that actually works, and environment variables do not change mid-run,
 so evaluating the gate in the attribute constructor is exact.
+
+**A failed `Debug.Assert` fails only the test that hit it.** `dotnet test` runs the Debug build, so
+the library's asserts are live in the suite. testhost's trace listener turns a failed one into a
+`DebugAssertException` on the asserting thread, which fails the test awaiting it; from a thread
+nobody awaits, it crashes the test host and aborts the run. Asserts are for invariants that only a
+bug in this library can break, never for anything a peer, a share link or a caller controls: that
+must throw, because an assert is gone from the Release build and a hostile peer walks past it. And
+anything that catches `Exception` hides a failed assert — `Assert.ThrowsAny<Exception>`, a `catch`
+that only inspects a message, or a test that accepts whatever reason `Proxy.TryCreate` gives. Assert
+the exact exception type the code throws.
 
 If a docker run is interrupted, clean up with:
 

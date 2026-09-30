@@ -4,19 +4,22 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <LangVersion>latest</LangVersion>
+        <!-- Turns on the trim, AOT and single-file analyzers, so a reflection-based dependency
+             (a JsonSerializer call, say) fails the build instead of a user's published app. -->
+        <IsAotCompatible>true</IsAotCompatible>
         <MinVerTagPrefix>v</MinVerTagPrefix>
-        <MinVerMinimumMajorMinor>4.0</MinVerMinimumMajorMinor>
+        <MinVerMinimumMajorMinor>5.0</MinVerMinimumMajorMinor>
     </PropertyGroup>
     <PropertyGroup>
         <PackageId>QuickProxyNet</PackageId>
         <Authors>Titlehhhh</Authors>
         <Company>Titlehhhh</Company>
-        <Description>QuickProxyNet is a high-performance, zero-dependency .NET library for connecting to servers via HTTP, HTTPS, SOCKS4, SOCKS4a and SOCKS5 proxies, and via the VPN-style protocols VLESS, VMess and Trojan over tcp, ws or httpupgrade. Provides direct Stream access for low-level network operations. VLESS REALITY and the xtls-rprx-vision flow are implemented in managed code, with no external binary.</Description>
-        <PackageTags>proxy;networking;http;socks;socks5;vless;vmess;trojan;reality;xtls;vision;xray;v2ray;vpn;high-performance</PackageTags>
+        <Description>QuickProxyNet is a high-performance, zero-dependency .NET library for connecting to servers via HTTP, HTTPS, SOCKS4, SOCKS4a and SOCKS5 proxies, and via the VPN-style protocols VLESS, VMess and Trojan over tcp, ws or httpupgrade, and Shadowsocks AEAD over tcp. Provides direct Stream access for low-level network operations. VLESS REALITY and the xtls-rprx-vision flow are implemented in managed code, with no external binary.</Description>
+        <PackageTags>proxy;networking;http;socks;socks5;vless;vmess;trojan;shadowsocks;reality;xtls;vision;xray;v2ray;vpn;high-performance</PackageTags>
         <Copyright>Copyright © Titlehhhh 2024-2026</Copyright>
         <RepositoryUrl>https://github.com/Titlehhhh/QuickProxyNet</RepositoryUrl>
         <PackageProjectUrl>https://github.com/Titlehhhh/QuickProxyNet</PackageProjectUrl>
-        <PackageReleaseNotes>4.0.0 adds VLESS, VMess and Trojan outbounds next to the HTTP/SOCKS clients. VLESS REALITY and the xtls-rprx-vision flow are implemented in managed code — no Xray or other external binary. ProxyClientFactory.Create(string) and Proxy.ConnectAsync(string, host, port) take a link of any supported scheme, including vmess:// links that System.Uri cannot represent. No public type or member from 3.0.0 was removed or changed; the major bump covers new ProxyType/ProxyErrorCode members and Create(Uri) now returning a client for vless/trojan/vmess instead of throwing. Not included: grpc and xhttp transports, Hysteria2, and a browser-grade ClientHello fingerprint for REALITY. Full notes: https://github.com/Titlehhhh/QuickProxyNet/releases/tag/v4.0.0</PackageReleaseNotes>
+        <PackageReleaseNotes>5.0.0 removes Uri and the read and write timeouts from the public API. ProxyClientFactory is gone: its Create methods are now static on Proxy. Removed: IProxyClient.ProxyUri, IProxyClient.ReadTimeout and WriteTimeout, the Proxy.ConnectAsync(Uri, ...) overloads and ProxyUriExtensions. New: Shadowsocks AEAD over tcp, a connect target as an EndPoint (for SocketsHttpHandler.ConnectCallback), Proxy.TryCreate for bulk link parsing, IProxyClient.SourceLink and ProxyErrorCode.TlsHandshakeFailed. Fixed: IPv6 proxy addresses, the HTTPS proxy certificate check, escaped credentials in links, and header injection through a target host or a ws path. Migration guide and full notes: https://github.com/Titlehhhh/QuickProxyNet/releases/tag/v5.0.0</PackageReleaseNotes>
     </PropertyGroup>
     
     <PropertyGroup>

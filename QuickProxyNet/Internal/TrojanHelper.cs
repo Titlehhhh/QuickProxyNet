@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -73,6 +74,9 @@ internal static class TrojanHelper
         BinaryPrimitives.WriteUInt16BigEndian(buffer.Slice(offset), (ushort)port);
         offset += 2;
 
+        // MaxRequestSize is what EstablishTrojanTunnelAsync rents; the pool's rounding would hide a
+        // request that outgrew it.
+        Debug.Assert(offset + 2 <= MaxRequestSize);
         buffer[offset] = CR;
         buffer[offset + 1] = LF;
         return offset + 2;

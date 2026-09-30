@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Sockets;
 
 namespace QuickProxyNet;
@@ -9,7 +9,18 @@ namespace QuickProxyNet;
 /// </summary>
 public interface IProxyClient
 {
-    Uri ProxyUri { get; }
+    /// <summary>
+    /// The share link or URL this client was built from, or <see langword="null"/> when it was
+    /// built from explicit settings.
+    /// </summary>
+    /// <remarks>
+    /// Nothing else on the client can stand in for this. For VLESS, Trojan, VMess and Shadowsocks,
+    /// <see cref="Type"/>, <see cref="ProxyHost"/> and <see cref="ProxyPort"/> only say where to
+    /// connect: a node written out as <c>scheme://host:port</c> has lost its uuid, sni, flow and
+    /// transport, and cannot be connected to again. Code that checks a list of nodes and reports
+    /// the ones that worked needs the text that came in, not a normalised summary of it.
+    /// </remarks>
+    string? SourceLink => null;
     
     /// <summary>
     /// Gets the credentials used to authenticate with the proxy server, if required.
@@ -17,7 +28,8 @@ public interface IProxyClient
     NetworkCredential? ProxyCredentials { get; }
 
     /// <summary>
-    /// Gets the hostname or IP address of the proxy server.
+    /// Gets the hostname or IP address of the proxy server. An IPv6 address is given without
+    /// brackets.
     /// </summary>
     string ProxyHost { get; }
 
@@ -49,16 +61,6 @@ public interface IProxyClient
     bool NoDelay { get; set; }
 
     /// <summary>
-    /// Gets or sets the write timeout in milliseconds for sending data through the proxy.
-    /// </summary>
-    int WriteTimeout { get; set; }
-
-    /// <summary>
-    /// Gets or sets the read timeout in milliseconds for receiving data through the proxy.
-    /// </summary>
-    int ReadTimeout { get; set; }
-
-    /// <summary>
     /// Asynchronously connects to a target host and port through the proxy.
     /// </summary>
     /// <param name="host">The target host to connect to.</param>
@@ -82,8 +84,73 @@ public interface IProxyClient
     /// </summary>
     /// <param name="host">The target host to connect to.</param>
     /// <param name="port">The target port on the host.</param>
-    /// <param name="timeout">The maximum time, in milliseconds, to wait for a connection to the host.</param>
+    /// <param name="timeout">
+    /// The maximum time to wait for the connection to the proxy and the handshake through it, or
+    /// <see cref="Timeout.InfiniteTimeSpan"/>. Running out ends in <see cref="ProxyErrorCode.Timeout"/>.
+    /// </param>
     /// <param name="cancellationToken">A cancellation token that can be used to cancel the connection attempt.</param>
     /// <returns>A <see cref="ValueTask"/> representing the asynchronous operation and yielding the connected <see cref="Stream"/>.</returns>
     ValueTask<Stream> ConnectAsync(string host, int port, TimeSpan timeout, CancellationToken cancellationToken = default);
-}
+
+    /// <summary>
+    /// Asynchronously connects to a target endpoint through the proxy.
+    /// </summary>
+    /// <param name="target">
+    /// A <see cref="DnsEndPoint"/>, whose name the proxy resolves and whose address family is
+    /// therefore not a constraint, or an <see cref="IPEndPoint"/>.
+    /// </param>
+    /// <param name="cancellationToken">A cancellation token that can be used to cancel the connection attempt.</param>
+    /// <returns>A <see cref="ValueTask"/> representing the asynchronous operation and yielding the connected <see cref="Stream"/>.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="target"/> is neither a <see cref="DnsEndPoint"/> nor an <see cref="IPEndPoint"/>.
+    /// </exception>
+    /// <remarks>
+    /// The shape <see cref="Socket.ConnectAsync(EndPoint, CancellationToken)"/> has, and the one
+    /// <c>SocketsHttpHandler.ConnectCallback</c> hands over. An IPv4 address carried as IPv6
+    /// (<c>::ffff:a.b.c.d</c>, as a dual-mode socket reports its peers) is sent as the IPv4
+    /// address it is.
+    /// </remarks>
+    async ValueTask<Stream> ConnectAsync(EndPoint target, CancellationToken cancellationToken = default)
+    {
+        var (host, port) = ProxyClient.SplitTarget(target);
+        return await ConnectAsync(host, port, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Asynchronously connects to a target endpoint through the proxy, with a specified timeout.
+    /// </summary>
+    /// <param name="target">
+    /// A <see cref="DnsEndPoint"/> or an <see cref="IPEndPoint"/>, as for
+    /// <see cref="ConnectAsync(EndPoint, CancellationToken)"/>.
+    /// </param>
+    /// <param name="timeout">The maximum time to wait for the connection to complete.</param>
+    /// <param name="cancellationToken">A cancellation token that can be used to cancel the connection attempt.</param>
+    /// <returns>A <see cref="ValueTask"/> representing the asynchronous operation and yielding the connected <see cref="Stream"/>.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="target"/> is neither a <see cref="DnsEndPoint"/> nor an <see cref="IPEndPoint"/>.
+    /// </exception>
+    async ValueTask<Stream> ConnectAsync(EndPoint target, TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        var (host, port) = ProxyClient.SplitTarget(target);
+        return await ConnectAsync(host, port, timeout, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Asynchronously connects to a target endpoint through the proxy, using an existing stream.
+    /// </summary>
+    /// <param name="source">The source <see cref="Stream"/> to use for establishing the connection.</param>
+    /// <param name="target">
+    /// A <see cref="DnsEndPoint"/> or an <see cref="IPEndPoint"/>, as for
+    /// <see cref="ConnectAsync(EndPoint, CancellationToken)"/>.
+    /// </param>
+    /// <param name="cancellationToken">A cancellation token that can be used to cancel the connection attempt.</param>
+    /// <returns>A <see cref="ValueTask"/> representing the asynchronous operation and yielding the connected <see cref="Stream"/>.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="target"/> is neither a <see cref="DnsEndPoint"/> nor an <see cref="IPEndPoint"/>.
+    /// </exception>
+    async ValueTask<Stream> ConnectAsync(Stream source, EndPoint target, CancellationToken cancellationToken = default)
+    {
+        var (host, port) = ProxyClient.SplitTarget(target);
+        return await ConnectAsync(source, host, port, cancellationToken).ConfigureAwait(false);
+    }
+}

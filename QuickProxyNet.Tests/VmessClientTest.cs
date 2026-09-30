@@ -340,6 +340,46 @@ public class VmessClientTest
         Assert.Null(o.Remark);
     }
 
+    // Telegram-style "@channel" tags are common in remarks. An '@' selects the URI grammar only
+    // before the fragment; after it, it is part of the name, and it used to reject the link.
+    [Theory]
+    [InlineData("#@channel", "@channel")]
+    [InlineData("#Node @ Telegram", "Node @ Telegram")]
+    [InlineData("#Node%20%40%20Telegram", "Node @ Telegram")]
+    public void TryParse_AtSignInFragmentAfterBase64_IsPartOfTheRemark(string fragment, string remark)
+    {
+        Assert.True(VmessShareLink.TryParse(Link(MinimalJson()) + fragment, out var o));
+        Assert.Equal(ProxyHost, o.Host);
+        Assert.Equal(remark, o.Remark);
+    }
+
+    [Fact]
+    public void TryParse_EmptyJsonPs_FallsBackToTheFragment()
+    {
+        string json = MinimalJson(extra: ",\"ps\":\"\"");
+        Assert.True(VmessShareLink.TryParse(Link(json) + "#from fragment", out var o));
+        Assert.Equal("from fragment", o.Remark);
+    }
+
+    // Go's base64 decoder, which Xray and most producers run, ignores the unused low bits of the
+    // last character. .NET 10 ignores them too; .NET 11 rejects the group, so this link used to
+    // parse on one of the test project's targets and not the other.
+    [Fact]
+    public void TryParse_UnusedTrailingBase64BitsSet_ParsesOnEveryTarget()
+    {
+        string json = MinimalJson();
+        while (Encoding.UTF8.GetByteCount(json) % 3 != 1)
+            json += " ";
+
+        char[] link = Link(json).ToCharArray();
+        const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        int last = link.Length - 3; // the data character before "=="
+        link[last] = alphabet[alphabet.IndexOf(link[last]) | 0x0F];
+
+        Assert.True(VmessShareLink.TryParse(new string(link), out var o));
+        Assert.Equal(ProxyHost, o.Host);
+    }
+
     // ===================== grammar 2: the standard URI form =====================
     //
     // vmess://{uuid}@{host}:{port}?{query}#{remark} — 48 links in the corpus. The query
@@ -667,7 +707,26 @@ public class VmessClientTest
         Assert.Equal(ProxyHost, client.ProxyHost);
         Assert.Equal(ProxyPort, client.ProxyPort);
         Assert.Same(options, client.Options);
-        Assert.Equal("vmess", client.ProxyUri.Scheme);
+        Assert.Equal($"vmess://{ProxyHost}:{ProxyPort}", client.ToString());
+    }
+
+    /// <summary>
+    /// An empty sni counts as absent for the TLS name, as it already did for the ws Host header. It
+    /// used to be sent as the name itself, so the hello carried neither the host header nor the
+    /// server address. A link never gives an empty one; options built by hand can.
+    /// </summary>
+    [Fact]
+    public async Task Client_EmptySni_FallsBackToTheHostHeaderForTheTlsName()
+    {
+        var transport = new FakeProxyStream([]);
+        var client = new VmessClient(new VmessOptions
+        {
+            Id = Uuid, Host = "server.example.net", Port = 443, UseTls = true, Sni = "", HostHeader = "cdn.example.net"
+        });
+
+        await Assert.ThrowsAsync<IOException>(() => client.ConnectAsync(transport, "example.org", 443).AsTask());
+
+        Assert.True(transport.WrittenBytes.AsSpan().IndexOf("cdn.example.net"u8) >= 0);
     }
 
     [Fact]
@@ -710,7 +769,7 @@ public class VmessClientTest
         string link = UriLink(MinimalJson(add: "cdn.example.com", port: "8443",
             extra: ",\"scy\":\"aes-128-gcm\",\"tls\":\"tls\""));
 
-        var client = ProxyClientFactory.Instance.Create(new Uri(link));
+        var client = Proxy.Create(new Uri(link));
 
         var vmess = Assert.IsType<VmessClient>(client);
         Assert.Equal(ProxyType.Vmess, vmess.Type);
@@ -724,7 +783,7 @@ public class VmessClientTest
     public void Factory_InvalidVmessUri_Throws()
     {
         var uri = new Uri(UriLink(MinimalJson(extra: ",\"aid\":\"1\"")));
-        Assert.Throws<FormatException>(() => ProxyClientFactory.Instance.Create(uri));
+        Assert.Throws<FormatException>(() => Proxy.Create(uri));
     }
 
     [Fact]

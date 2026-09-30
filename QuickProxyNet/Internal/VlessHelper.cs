@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Text;
 
 namespace QuickProxyNet;
@@ -53,6 +54,9 @@ internal static class VlessHelper
         try
         {
             int length = BuildRequest(buffer, options.Id, host, port, vision ? VisionStream.FlowName : default);
+
+            // MaxRequestSize is the rental; ArrayPool's rounding would hide a request that outgrew it.
+            Debug.Assert(length <= MaxRequestSize);
             await stream.WriteAsync(buffer.AsMemory(0, length), cancellationToken).ConfigureAwait(false);
             await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
         }

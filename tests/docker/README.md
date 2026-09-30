@@ -4,8 +4,8 @@ Real Xray-core and sing-box servers for `QuickProxyNet.Tests/Integration/DockerP
 
 Byte-exact vectors prove our crypto matches an independent implementation. They cannot prove a
 server *accepts* the handshake — framing, field order, the VMess option byte, the address-type
-codes and the non-UUID id derivation all have to be right simultaneously for that. This stack is
-the only thing in the repo that proves it.
+codes, the non-UUID id derivation and the Shadowsocks lazy salt read all have to be right
+simultaneously for that. This stack is the only thing in the repo that proves it.
 
 Two implementations are here on purpose: they disagree about what they tolerate, so one alone
 would silently bless a bug the other rejects.
@@ -49,7 +49,10 @@ All three are expected to be present locally; nothing here builds an image.
 
 ## Host port map
 
-Container ports are `10001..10010`; the host ports differ per server so both can run at once.
+Container ports are `10001..10010` for the first batch and `10011..10014` for Shadowsocks; the
+host ports differ per server so both can run at once. The Shadowsocks ports break the
+`+24800`/`+24810` pattern on purpose — past `10010` it cannot hold for both servers — and take a
+fresh decade each: xray `2482x`, sing-box `2483x`.
 
 | Host port | Server | Inbound | Credential |
 | --- | --- | --- | --- |
@@ -72,9 +75,16 @@ Container ports are `10001..10010`; the host ports differ per server so both can
 | 24818 | sing-box | vmess over `ws`, path `/qpn-vmess-ws` | `66666666-6666-4666-8666-666666666666` |
 | 24819 | sing-box | trojan over `ws` + TLS, path `/qpn-trojan-ws` | `qpn-test-trojan-password` |
 | 24820 | sing-box | vless over `httpupgrade`, path `/qpn-hu` | `77777777-7777-4777-8777-777777777777` |
+| 24821 | xray | shadowsocks `aes-256-gcm` | `qpn-test-ss-password` |
+| 24822 | xray | shadowsocks `chacha20-ietf-poly1305` | `qpn-test-ss-password` |
+| 24823 | xray | shadowsocks `aes-128-gcm` | `qpn-test-ss-password` |
+| 24831 | sing-box | shadowsocks `aes-256-gcm` | `qpn-test-ss-password` |
+| 24832 | sing-box | shadowsocks `chacha20-ietf-poly1305` | `qpn-test-ss-password` |
+| 24833 | sing-box | shadowsocks `aes-128-gcm` | `qpn-test-ss-password` |
+| 24834 | sing-box | shadowsocks `aes-192-gcm` — **sing-box only** | `qpn-test-ss-password` |
 
-Every credential above is synthetic test data committed on purpose — repdigit UUIDs and a literal
-password. None of it is, or ever was, a real credential. The C# side mirrors this table in
+Every credential above is synthetic test data committed on purpose — repdigit UUIDs and literal
+passwords. None of it is, or ever was, a real credential. The C# side mirrors this table in
 `QuickProxyNet.Tests/Integration/DockerEndpoints.cs`; keep the two in sync.
 
 ### The two VMess ports
@@ -91,6 +101,26 @@ any id of length 1..30 to `UUIDv5(nil-namespace, utf8(id))`, and `UuidCodec` mir
 VLESS id is compared byte for byte on the server, so `Vless_NonUuidId_DerivesSameIdAsXray`
 round-tripping means our derivation matches Xray's exactly — a unit vector could only ever pin
 that against ourselves. sing-box has no equivalent, so this inbound is Xray-only.
+
+### The Shadowsocks ports
+
+Unlike VMess, a Shadowsocks inbound is bound to one cipher, so each cipher needs its own port.
+`aes-192-gcm` is not in the SIP004 table: sing-box and shadowsocks-libev speak it, Xray's
+`cipherFromString` has no case for it, so port 24834 has no Xray twin and
+`Shadowsocks_Aes192Gcm_RoundTrip_SingBoxOnly` is a single-server test by necessity. Its 24-byte
+salt is also the one size no permissive implementation could have vectored for us.
+
+Xray prints a deprecation warning for the `shadowsocks` inbound at startup. It is harmless and
+not a failure.
+
+A Shadowsocks server sends its salt only after the target has replied, and sends **nothing** to a
+client whose first chunk it cannot open — Xray additionally drains a pseudo-random number of bytes
+before closing (`NewBehaviorSeedLimitedDrainer(seed, 16+38, 3266, 64)` in
+`proxy/shadowsocks/protocol.go`: under 3400 bytes in total, 54 + 3266 + 64 at the very most).
+`Shadowsocks_WrongPassword_ConnectSucceeds_ReadFails` writes an HTTP request plus 4096 filler
+bytes so the drainer always runs out, and then expects the failure on the first read as a closed
+connection (a FIN, or a RST because the surplus was left unread) — never a timeout, never at
+connect time. A client whose first read simply hangs fails this test.
 
 ## The echo target
 

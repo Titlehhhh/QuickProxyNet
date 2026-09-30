@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Text;
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 
@@ -18,10 +19,14 @@ internal static class HttpHelper
     private static (byte[] buffer, int length) BuildConnectionCommand(
         string host, int port, NetworkCredential? credentials)
     {
-        int hostMaxBytes = Encoding.UTF8.GetMaxByteCount(host.Length);
+        // An IPv6 literal is bracketed in both places (RFC 9112 §3.2.3 takes the authority from
+        // RFC 3986): unbracketed, its colons run into the port. Host names and IPv4 literals never
+        // contain ':', and a caller may already have bracketed one.
+        bool bracket = host.Contains(':') && !host.StartsWith('[');
+        int hostMaxBytes = Encoding.UTF8.GetMaxByteCount(host.Length) + (bracket ? 2 : 0);
 
         // CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n
-        //   8      255    1  5   17       255    1  5  2  2  = ~551 bytes worst case
+        //   8      257    1  5   17       257    1  5  2  2  = ~555 bytes worst case
         int size = 8 + hostMaxBytes + 1 + 5 + 17 + hostMaxBytes + 1 + 5 + 4;
 
         if (credentials is not null)
@@ -38,13 +43,13 @@ internal static class HttpHelper
 
         // CONNECT {host}:{port} HTTP/1.1\r\n
         S_connect.CopyTo(buf.AsSpan(pos)); pos += S_connect.Length;
-        pos += Encoding.UTF8.GetBytes(host, buf.AsSpan(pos));
+        pos += WriteHost(host, bracket, buf.AsSpan(pos));
         buf[pos++] = (byte)':';
         Utf8Formatter.TryFormat(port, buf.AsSpan(pos), out int portLen); pos += portLen;
 
         // Host: {host}:{port}\r\n
         S_http11Host.CopyTo(buf.AsSpan(pos)); pos += S_http11Host.Length;
-        pos += Encoding.UTF8.GetBytes(host, buf.AsSpan(pos));
+        pos += WriteHost(host, bracket, buf.AsSpan(pos));
         buf[pos++] = (byte)':';
         Utf8Formatter.TryFormat(port, buf.AsSpan(pos), out portLen); pos += portLen;
         S_crlf.CopyTo(buf.AsSpan(pos)); pos += 2;
@@ -69,7 +74,7 @@ internal static class HttpHelper
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(credBuf);
+                ArrayPool<byte>.Shared.Return(credBuf, clearArray: true);
             }
 
             S_crlf.CopyTo(buf.AsSpan(pos)); pos += 2;
@@ -78,11 +83,24 @@ internal static class HttpHelper
         // End of headers
         S_crlf.CopyTo(buf.AsSpan(pos)); pos += 2;
 
+        // size is a worst case, and the pool's rounding would hide a formula that fell short of it.
+        Debug.Assert(pos <= size);
         return (buf, pos);
     }
 
-    internal static async ValueTask<Stream> EstablishHttpTunnelAsync(Stream stream, Uri proxyUri, string host,
-        int port, NetworkCredential? credentials, CancellationToken cancellationToken)
+    private static int WriteHost(string host, bool bracket, Span<byte> dest)
+    {
+        if (!bracket)
+            return Encoding.UTF8.GetBytes(host, dest);
+
+        dest[0] = (byte)'[';
+        int length = Encoding.UTF8.GetBytes(host, dest.Slice(1));
+        dest[1 + length] = (byte)']';
+        return length + 2;
+    }
+
+    internal static async ValueTask<Stream> EstablishHttpTunnelAsync(Stream stream, string host, int port,
+        NetworkCredential? credentials, CancellationToken cancellationToken)
     {
         var (cmd, cmdLen) = BuildConnectionCommand(host, port, credentials);
         try
@@ -91,7 +109,8 @@ internal static class HttpHelper
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(cmd);
+            // With credentials, the request carries base64(user:password).
+            ArrayPool<byte>.Shared.Return(cmd, clearArray: credentials is not null);
         }
 
         var parser = new HttpResponseParser();

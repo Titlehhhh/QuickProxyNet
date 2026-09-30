@@ -161,7 +161,7 @@ public class TrojanTest
     [Fact]
     public void Client_IPv6Host_ConstructsWithoutThrowing()
     {
-        // The base ProxyClient ctor must bracket the IPv6 literal when composing ProxyUri.
+        // An IPv6 literal must pass through the base ProxyClient constructor and stay unbracketed.
         var client = new TrojanClient(TrojanShareLink.Parse("trojan://secret@[2001:db8::1]:443"));
         Assert.Equal("2001:db8::1", client.ProxyHost);
         Assert.Equal(443, client.ProxyPort);
@@ -180,12 +180,31 @@ public class TrojanTest
             () => client.ConnectAsync(stream, "example.org", 443, CancellationToken.None).AsTask());
     }
 
+    /// <summary>
+    /// An empty sni counts as absent for the TLS name, as it already did for the ws Host header. It
+    /// used to be sent as the name itself, so the hello carried neither the host header nor the
+    /// server address.
+    /// </summary>
+    [Fact]
+    public async Task Client_EmptySni_FallsBackToTheHostHeaderForTheTlsName()
+    {
+        var transport = new FakeProxyStream([]);
+        var client = new TrojanClient(new TrojanOptions
+        {
+            Password = Password, Host = "server.example.net", Port = 443, Sni = "", HostHeader = "cdn.example.net"
+        });
+
+        await Assert.ThrowsAsync<IOException>(() => client.ConnectAsync(transport, "example.org", 443).AsTask());
+
+        Assert.True(transport.WrittenBytes.AsSpan().IndexOf("cdn.example.net"u8) >= 0);
+    }
+
     // === Factory ===
 
     [Fact]
     public void Factory_CreatesTrojanClient()
     {
-        var client = ProxyClientFactory.Instance.Create(
+        var client = Proxy.Create(
             new Uri("trojan://pw@example.com:443?sni=a.com&allowInsecure=1"));
         var trojan = Assert.IsType<TrojanClient>(client);
         Assert.Equal(ProxyType.Trojan, trojan.Type);

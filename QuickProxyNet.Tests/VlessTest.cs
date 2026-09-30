@@ -1,3 +1,4 @@
+using System.Net.Security;
 using QuickProxyNet.Tests.Helpers;
 
 namespace QuickProxyNet.Tests;
@@ -193,9 +194,9 @@ public class VlessTest
     public void Parse_Reality_KeepsKeys()
     {
         var o = VlessShareLink.Parse(
-            $"vless://{Uuid}@example.com:443?security=reality&pbk=PUBKEY&sid=ab12&sni=www.microsoft.com&fp=chrome&flow=xtls-rprx-vision#r");
+            $"vless://{Uuid}@example.com:443?security=reality&pbk=BhsV4NiigG9rrk98hJnJHPJ7TQ6Iy1WqUykGF0z9I2g&sid=ab12&sni=www.microsoft.com&fp=chrome&flow=xtls-rprx-vision#r");
         Assert.Equal(VlessSecurity.Reality, o.Security);
-        Assert.Equal("PUBKEY", o.RealityPublicKey);
+        Assert.Equal("BhsV4NiigG9rrk98hJnJHPJ7TQ6Iy1WqUykGF0z9I2g", o.RealityPublicKey);
         Assert.Equal("ab12", o.RealityShortId);
         Assert.Equal("chrome", o.Fingerprint);
         Assert.Equal("xtls-rprx-vision", o.Flow);
@@ -250,11 +251,11 @@ public class VlessTest
     public void Parse_HtmlEscapedSeparators_DoNotSilentlyDowngradeRealityToPlaintext()
     {
         var o = VlessShareLink.Parse(
-            $"vless://{Uuid}@example.com:443?type=tcp&amp;security=reality&amp;pbk=PUBKEY" +
+            $"vless://{Uuid}@example.com:443?type=tcp&amp;security=reality&amp;pbk=BhsV4NiigG9rrk98hJnJHPJ7TQ6Iy1WqUykGF0z9I2g" +
             "&amp;sid=ab12&amp;flow=xtls-rprx-vision");
 
         Assert.Equal(VlessSecurity.Reality, o.Security);
-        Assert.Equal("PUBKEY", o.RealityPublicKey);
+        Assert.Equal("BhsV4NiigG9rrk98hJnJHPJ7TQ6Iy1WqUykGF0z9I2g", o.RealityPublicKey);
         Assert.Equal("ab12", o.RealityShortId);
         Assert.Equal("xtls-rprx-vision", o.Flow);
     }
@@ -278,7 +279,7 @@ public class VlessTest
         // A MemoryStream answers every read with "end of stream", so the handshake cannot
         // complete — but what was written before it failed is the point.
         var transport = new MemoryStream();
-        Assert.ThrowsAny<Exception>(() =>
+        Assert.Throws<RealityHandshakeException>(() =>
             new VlessClient(o).ConnectAsync(transport, "example.com", 443).AsTask().GetAwaiter().GetResult());
 
         byte[] written = transport.ToArray();
@@ -319,7 +320,7 @@ public class VlessTest
     [Fact]
     public void Client_IPv6Host_ConstructsWithoutThrowing()
     {
-        // The base ProxyClient ctor must bracket the IPv6 literal when composing ProxyUri.
+        // An IPv6 literal must pass through the base ProxyClient constructor and stay unbracketed.
         var client = new VlessClient(VlessShareLink.Parse($"vless://{Uuid}@[2001:db8::1]:443?security=none"));
         Assert.Equal("2001:db8::1", client.ProxyHost);
         Assert.Equal(443, client.ProxyPort);
@@ -437,25 +438,208 @@ public class VlessTest
     }
 
     /// <summary>
-    /// A <c>pbk</c> that is not a key is a configuration error and must be reported as one —
-    /// naming the value, before anything is written — rather than as "REALITY not supported"
-    /// (which it is) or as an ArgumentException from inside the handshake.
+    /// A <c>pbk</c> that is not a key is a configuration error, reported with the value named when
+    /// the link is parsed or the client is built. It used to surface from ConnectAsync as a
+    /// FormatException, which that call may not throw.
     /// </summary>
     [Theory]
-    [InlineData("x")]                                        // not base64url at all
-    [InlineData("AAAA")]                                     // decodes to 3 bytes, not 32
-    public async Task Client_Reality_MalformedPublicKey_ThrowsFormatBeforeWriting(string pbk)
+    [InlineData("x")]    // not base64url at all
+    [InlineData("AAAA")] // decodes to 3 bytes, not 32
+    public void Reality_MalformedPublicKey_IsRefusedBeforeAnyConnect(string pbk)
     {
-        var stream = new FakeProxyStream([0x00, 0x00]);
-        var client = new VlessClient(
+        var parse = Assert.Throws<FormatException>(() =>
             VlessShareLink.Parse($"vless://{Uuid}@example.com:443?security=reality&pbk={pbk}"));
+        Assert.Contains($"'{pbk}'", parse.Message);
 
-        var ex = await Assert.ThrowsAsync<FormatException>(
-            () => client.ConnectAsync(stream, "example.org", 443, CancellationToken.None).AsTask());
-
-        Assert.Contains(pbk, ex.Message);
+        var options = new VlessOptions
+        {
+            Id = Uuid, Host = "example.com", Port = 443, Security = VlessSecurity.Reality, RealityPublicKey = pbk
+        };
+        var construct = Assert.Throws<ArgumentException>(() => new VlessClient(options));
+        Assert.Contains($"'{pbk}'", construct.Message);
     }
 
+    [Theory]
+    [InlineData("abc")]                // odd length
+    [InlineData("zz")]                 // not hex
+    [InlineData("001122334455667788")] // nine bytes, one more than a short id holds
+    public void Reality_MalformedShortId_IsRefusedBeforeAnyConnect(string sid)
+    {
+        const string pbk = "BhsV4NiigG9rrk98hJnJHPJ7TQ6Iy1WqUykGF0z9I2g";
+
+        var parse = Assert.Throws<FormatException>(() =>
+            VlessShareLink.Parse($"vless://{Uuid}@example.com:443?security=reality&pbk={pbk}&sid={sid}"));
+        Assert.Contains($"'{sid}'", parse.Message);
+
+        var options = new VlessOptions
+        {
+            Id = Uuid, Host = "example.com", Port = 443, Security = VlessSecurity.Reality,
+            RealityPublicKey = pbk, RealityShortId = sid
+        };
+        Assert.Throws<ArgumentException>(() => new VlessClient(options));
+    }
+
+    [Fact]
+    public void Reality_PublicKeyWithUnusedTrailingBitsSet_DecodesToTheSameKey()
+    {
+        // A 43-character key's last character carries two bits no byte uses. Go ignores them and
+        // so does .NET 10; .NET 11 alone would refuse the key.
+        const string canonical = "BhsV4NiigG9rrk98hJnJHPJ7TQ6Iy1WqUykGF0z9I2g";
+        string loose = canonical[..^1] + "h";
+
+        Assert.True(RealityAuth.TryDecodePublicKey(canonical, out byte[]? expected, out _));
+        Assert.True(RealityAuth.TryDecodePublicKey(loose, out byte[]? actual, out _));
+        Assert.Equal(expected, actual);
+    }
+
+    private const string RealityKey = "BhsV4NiigG9rrk98hJnJHPJ7TQ6Iy1WqUykGF0z9I2g";
+
+    private static VlessOptions RealityOptions(
+        string host = "example.com", string? sni = null, string? hostHeader = null, IReadOnlyList<string>? alpn = null) =>
+        new()
+        {
+            Id = Uuid, Host = host, Port = 443, Security = VlessSecurity.Reality, RealityPublicKey = RealityKey,
+            Sni = sni, HostHeader = hostHeader, Alpn = alpn
+        };
+
+    /// <summary>
+    /// The server name goes into a ClientHello written as one TLS record. A 70 000-character sni on
+    /// built options used to leave ConnectAsync as an InvalidOperationException from the hello writer,
+    /// and a 17 000-character one in a link as an ArgumentOutOfRangeException from the record layer,
+    /// both after the TCP connect. The name is bounded where it enters, whichever field it comes from:
+    /// sni, else host, else the server address.
+    /// </summary>
+    [Fact]
+    public void Reality_ServerNameLongerThanADnsName_IsRefusedBeforeAnyConnect()
+    {
+        string link = $"vless://{Uuid}@example.com:443?security=reality&pbk={RealityKey}";
+
+        var fromSni = Assert.Throws<FormatException>(() => VlessShareLink.Parse(link + "&sni=" + new string('s', 17_000)));
+        Assert.Contains("17000 characters", fromSni.Message);
+        Assert.Throws<FormatException>(() => VlessShareLink.Parse(link + "&host=" + new string('h', 254)));
+        Assert.Throws<FormatException>(() => Proxy.Create(link + "&sni=" + new string('s', 254)));
+
+        Assert.Throws<ArgumentException>(() => new VlessClient(RealityOptions(sni: new string('s', 70_000))));
+        Assert.Throws<ArgumentException>(() => new VlessClient(RealityOptions(hostHeader: new string('h', 254))));
+        Assert.Throws<ArgumentException>(() => new VlessClient(RealityOptions(host: new string('a', 254))));
+
+        // The limit itself is a name, and so is an internationalised one.
+        VlessShareLink.Parse(link + "&sni=" + new string('s', 253));
+        _ = new VlessClient(RealityOptions(sni: new string('s', 253)));
+        _ = new VlessClient(RealityOptions(sni: "пример.рф"));
+    }
+
+    /// <summary>
+    /// A name SNI cannot encode used to be found only inside the handshake, as an ArgumentException
+    /// out of ConnectAsync. It is a link that describes no reachable node, and is refused as one.
+    /// </summary>
+    [Fact]
+    public void Reality_ServerNameThatIsNotAHostName_IsRefusedBeforeAnyConnect()
+    {
+        string sni = new('ж', 60); // a label whose A-label form is longer than DNS allows
+
+        var parse = Assert.Throws<FormatException>(() =>
+            VlessShareLink.Parse($"vless://{Uuid}@example.com:443?security=reality&pbk={RealityKey}&sni={sni}"));
+        Assert.Contains("encoded for SNI", parse.Message);
+
+        Assert.Throws<ArgumentException>(() => new VlessClient(RealityOptions(sni: sni)));
+    }
+
+    /// <summary>
+    /// An empty sni on options built by hand counts as absent, as it already did when the ws Host
+    /// header is picked. It used to be sent as the name itself, so the hello carried none of the
+    /// names the options gave, over REALITY and over TLS alike.
+    /// </summary>
+    [Fact]
+    public async Task EmptySniOrHostHeader_CountsAsAbsent_ForTheServerName()
+    {
+        byte[] hello = await RealityHello(RealityOptions(host: "server.example.net", sni: "", hostHeader: "cdn.example.net"));
+        Assert.True(Carries(hello, "cdn.example.net"u8), "REALITY: an empty sni falls back to the host header");
+
+        hello = await RealityHello(RealityOptions(host: "server.example.net", sni: "", hostHeader: ""));
+        Assert.True(Carries(hello, "server.example.net"u8), "REALITY: empty sni and host header fall back to the server");
+
+        var tls = new VlessOptions
+        {
+            Id = Uuid, Host = "server.example.net", Port = 443, Security = VlessSecurity.Tls,
+            Sni = "", HostHeader = "cdn.example.net"
+        };
+        var transport = new FakeProxyStream([]);
+        await Assert.ThrowsAsync<IOException>(() => new VlessClient(tls).ConnectAsync(transport, "example.org", 443).AsTask());
+        Assert.True(Carries(transport.WrittenBytes, "cdn.example.net"u8), "TLS: an empty sni falls back to the host header");
+
+        static async Task<byte[]> RealityHello(VlessOptions options)
+        {
+            // Nothing answers, so the handshake ends at the first read, after the hello is written.
+            var transport = new FakeProxyStream([]);
+            await Assert.ThrowsAsync<RealityHandshakeException>(() =>
+                new VlessClient(options).ConnectAsync(transport, "example.org", 443).AsTask());
+            return transport.WrittenBytes;
+        }
+    }
+
+    private static bool Carries(byte[] written, ReadOnlySpan<byte> name) => written.AsSpan().IndexOf(name) >= 0;
+
+    [Fact]
+    public void Reality_AlpnBeyondWhatAHelloCarries_IsRefusedBeforeAnyConnect()
+    {
+        string link = $"vless://{Uuid}@example.com:443?security=reality&pbk={RealityKey}";
+        string[] seventeen = Enumerable.Range(0, 17).Select(i => $"p{i}").ToArray();
+        string[] atTheLimit = Enumerable.Repeat(new string('a', 255), 16).ToArray();
+
+        var tooMany = Assert.Throws<FormatException>(() => VlessShareLink.Parse(link + "&alpn=" + string.Join(',', seventeen)));
+        Assert.Contains("at most 16", tooMany.Message);
+        Assert.Throws<FormatException>(() => VlessShareLink.Parse(link + "&alpn=h2," + new string('a', 256)));
+        Assert.Throws<FormatException>(() =>
+            VlessShareLink.Parse(link + "&alpn=" + Uri.EscapeDataString(new string('é', 128)))); // 256 bytes
+
+        Assert.Throws<ArgumentException>(() => new VlessClient(RealityOptions(alpn: seventeen)));
+        Assert.Throws<ArgumentException>(() => new VlessClient(RealityOptions(alpn: ["h2", ""])));
+
+        VlessShareLink.Parse(link + "&alpn=" + string.Join(',', atTheLimit));
+        _ = new VlessClient(RealityOptions(alpn: atTheLimit));
+    }
+
+    /// <summary>
+    /// ALPN was encoded as ASCII, so <c>alpn=h%C3%A9</c>, which the constructor accepts, went out as
+    /// "h?". It is UTF-8 now, the bytes SslStream sends for the same protocol under security=tls.
+    /// </summary>
+    [Fact]
+    public void Reality_Hello_EncodesAlpnAsUtf8()
+    {
+        TlsClientHello.Result hello = TlsClientHello.Build("example.com", ["hé"]);
+
+        // ALPN is the last extension written: type 16, extension length 6, list length 4, then the
+        // one protocol with its length byte.
+        byte[] utf8 = new SslApplicationProtocol("hé").Protocol.ToArray();
+        Assert.Equal([0x00, 0x10, 0x00, 0x06, 0x00, 0x04, 3, .. utf8], hello.Handshake[^10..]);
+    }
+
+    /// <summary>
+    /// The bounds are what keep a hello inside the single record it is written into. This builds one
+    /// at every maximum at once and writes it the way RealityTlsClient does.
+    /// </summary>
+    [Fact]
+    public async Task Reality_HelloAtTheLargestAllowedNameAndAlpn_FitsOneRecord()
+    {
+        string serverName = new('s', TlsClientHello.MaxServerNameLength);
+        string[] alpn = Enumerable
+            .Repeat(new string('a', TlsClientHello.MaxAlpnProtocolLength), TlsClientHello.MaxAlpnProtocols)
+            .ToArray();
+
+        Assert.True(TlsClientHello.TryValidate(serverName, alpn, out string? error), error);
+        Assert.False(TlsClientHello.TryValidate(serverName + "s", alpn, out _));
+        Assert.False(TlsClientHello.TryValidate(serverName, [.. alpn, "h2"], out _));
+        Assert.False(TlsClientHello.TryValidate(serverName, [.. alpn[1..], alpn[0] + "a"], out _));
+
+        TlsClientHello.Result hello = TlsClientHello.Build(serverName, alpn);
+        Assert.True(hello.Handshake.Length <= TlsRecordStream.MaxPlaintext, $"The hello is {hello.Handshake.Length} bytes.");
+
+        using var transport = new MemoryStream();
+        using var records = new TlsRecordStream(transport);
+        await records.WriteAsync(TlsContentType.Handshake, hello.Handshake, CancellationToken.None);
+        Assert.Equal(5 + hello.Handshake.Length, transport.Length);
+    }
     /// <summary>
     /// REALITY failures are proxy errors like any other: the type carries a code a caller can
     /// branch on, and the two codes it uses mean different things to act on.
@@ -502,7 +686,7 @@ public class VlessTest
     [Fact]
     public void Factory_CreatesVlessClient()
     {
-        var client = ProxyClientFactory.Instance.Create(
+        var client = Proxy.Create(
             new Uri($"vless://{Uuid}@example.com:443?security=tls&sni=a.com"));
         var vless = Assert.IsType<VlessClient>(client);
         Assert.Equal(ProxyType.Vless, vless.Type);

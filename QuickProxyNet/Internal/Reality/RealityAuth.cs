@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 
 namespace QuickProxyNet;
@@ -79,22 +80,25 @@ internal static class RealityAuth
             throw new ArgumentException("The client random is 32 bytes.", nameof(clientRandom));
 
         Span<byte> shared = stackalloc byte[X25519.KeySize];
+        Span<byte> prk = stackalloc byte[AuthKeySize];
+        Span<byte> info = stackalloc byte[HkdfInfo.Length + 1];
         try
         {
             X25519.Agree(shared, clientPrivateKey, serverPublicKey);
 
-            // Not derived in place: HKDF reads the input while writing the output, and the two
-            // are the same size here, so aliasing them would be a silent corruption.
-            HKDF.DeriveKey(
-                HashAlgorithmName.SHA256,
-                ikm: shared,
-                output: authKey,
-                salt: clientRandom[..20],
-                info: HkdfInfo);
+            // HKDF-SHA256 with a 32-byte output is Extract, then the single Expand block
+            // HMAC(prk, info || 0x01). Spelled out because HKDF.DeriveKey allocates about 300
+            // bytes a call on net9 and net10. Not derived in place: the shared secret, the PRK and
+            // the auth key are all 32 bytes, and aliasing any two would corrupt silently.
+            HKDF.Extract(HashAlgorithmName.SHA256, shared, clientRandom[..20], prk);
+            HkdfInfo.CopyTo(info);
+            info[^1] = 0x01;
+            HMACSHA256.HashData(prk, info, authKey);
         }
         finally
         {
             CryptographicOperations.ZeroMemory(shared);
+            CryptographicOperations.ZeroMemory(prk);
         }
     }
 
@@ -194,6 +198,90 @@ internal static class RealityAuth
     }
 
     /// <summary>
+    /// Decodes a share link's <c>pbk</c>: base64url, usually unpadded, of the server's X25519 key.
+    /// </summary>
+    /// <param name="value">The <c>pbk</c> text.</param>
+    /// <param name="key">The 32-byte key, when this returns true.</param>
+    /// <param name="error">What is wrong with the value, naming it, when this returns false.</param>
+    public static bool TryDecodePublicKey(
+        string value, [NotNullWhen(true)] out byte[]? key, [NotNullWhen(false)] out string? error)
+    {
+        key = null;
+        char[] chars = new char[value.Length + 3];
+        byte[] decoded = new byte[(value.Length + 3) / 4 * 3];
+
+        if (!ShareLinkBase64.TryNormalize(value, chars, out int length) ||
+            !Convert.TryFromBase64Chars(chars.AsSpan(0, length), decoded, out int written))
+        {
+            error = $"The REALITY public key '{value}' is not valid base64url (expected the 'pbk' value from the share link).";
+            return false;
+        }
+
+        if (written != X25519.KeySize)
+        {
+            error = $"The REALITY public key '{value}' decodes to {written} bytes; an X25519 key is {X25519.KeySize}.";
+            return false;
+        }
+
+        key = decoded[..X25519.KeySize];
+        error = null;
+        return true;
+    }
+
+    /// <summary>
+    /// Parses the share link's <c>sid</c> — an even-length hex string — into a zero-padded short id.
+    /// </summary>
+    /// <param name="shortId">Receives 8 bytes, all zero when this returns false.</param>
+    /// <param name="hex">The hex text; may be empty, which is a valid configuration.</param>
+    /// <param name="error">What is wrong with the text, naming it, when this returns false.</param>
+    public static bool TryParseShortId(Span<byte> shortId, string? hex, [NotNullWhen(false)] out string? error)
+    {
+        if (shortId.Length != ShortIdSize)
+            throw new ArgumentException($"The short id is {ShortIdSize} bytes.", nameof(shortId));
+
+        shortId.Clear();
+        error = null;
+
+        if (string.IsNullOrEmpty(hex))
+            return true;
+
+        if ((hex.Length & 1) != 0)
+        {
+            error = $"A REALITY short id is an even number of hex digits; '{hex}' is not.";
+            return false;
+        }
+
+        if (hex.Length > ShortIdSize * 2)
+        {
+            error = $"A REALITY short id is at most {ShortIdSize} bytes ({ShortIdSize * 2} hex digits); " +
+                    $"'{hex}' is {hex.Length / 2}.";
+            return false;
+        }
+
+        for (int i = 0; i < hex.Length; i++)
+        {
+            int nibble = hex[i] switch
+            {
+                >= '0' and <= '9' => hex[i] - '0',
+                >= 'a' and <= 'f' => hex[i] - 'a' + 10,
+                >= 'A' and <= 'F' => hex[i] - 'A' + 10,
+                _ => -1
+            };
+
+            if (nibble < 0)
+            {
+                shortId.Clear();
+                error = $"'{hex[i]}' in the REALITY short id '{hex}' is not a hex digit.";
+                return false;
+            }
+
+            shortId[i / 2] |= (byte)(i % 2 == 0 ? nibble << 4 : nibble);
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Parses the share link's <c>sid</c> — an even-length hex string — into a zero-padded short id.
     /// </summary>
     /// <param name="shortId">Receives 8 bytes.</param>
@@ -201,31 +289,7 @@ internal static class RealityAuth
     /// <exception cref="FormatException">The text is not hex, or is longer than 8 bytes.</exception>
     public static void ParseShortId(Span<byte> shortId, string? hex)
     {
-        if (shortId.Length != ShortIdSize)
-            throw new ArgumentException($"The short id is {ShortIdSize} bytes.", nameof(shortId));
-
-        shortId.Clear();
-
-        if (string.IsNullOrEmpty(hex))
-            return;
-
-        if ((hex.Length & 1) != 0)
-            throw new FormatException($"A REALITY short id is an even number of hex digits; '{hex}' is not.");
-
-        if (hex.Length > ShortIdSize * 2)
-            throw new FormatException(
-                $"A REALITY short id is at most {ShortIdSize} bytes ({ShortIdSize * 2} hex digits); " +
-                $"'{hex}' is {hex.Length / 2}.");
-
-        for (int i = 0; i < hex.Length; i += 2)
-            shortId[i / 2] = (byte)((ParseNibble(hex[i]) << 4) | ParseNibble(hex[i + 1]));
-
-        static int ParseNibble(char c) => c switch
-        {
-            >= '0' and <= '9' => c - '0',
-            >= 'a' and <= 'f' => c - 'a' + 10,
-            >= 'A' and <= 'F' => c - 'A' + 10,
-            _ => throw new FormatException($"'{c}' is not a hex digit.")
-        };
+        if (!TryParseShortId(shortId, hex, out string? error))
+            throw new FormatException(error);
     }
 }

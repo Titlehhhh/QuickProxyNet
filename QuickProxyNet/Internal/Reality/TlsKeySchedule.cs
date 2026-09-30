@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -41,9 +42,20 @@ internal static class TlsKeySchedule
         ReadOnlySpan<byte> context,
         Span<byte> output)
     {
-        // HkdfLabel = uint16 length || opaque label<7..255> || opaque context<0..255>
+        int hashLength = HashLength(hash);
+        if (output.Length > hashLength)
+            throw new ArgumentException(
+                $"TLS 1.3 never expands past one hash length ({hashLength} bytes); {output.Length} were asked for.",
+                nameof(output));
+
+        // Every secret the schedule expands is one hash long. HMAC takes a key of any length, so a
+        // wrongly sliced one would derive wrong keys silently, and the symptom would look like the peer's.
+        Debug.Assert(secret.Length == hashLength);
+
+        // HkdfLabel = uint16 length || opaque label<7..255> || opaque context<0..255>, followed
+        // here by the one-byte block counter HKDF-Expand appends.
         int labelLength = LabelPrefix.Length + label.Length;
-        Span<byte> info = stackalloc byte[2 + 1 + labelLength + 1 + context.Length];
+        Span<byte> info = stackalloc byte[2 + 1 + labelLength + 1 + context.Length + 1];
 
         info[0] = (byte)(output.Length >> 8);
         info[1] = (byte)output.Length;
@@ -52,9 +64,32 @@ internal static class TlsKeySchedule
         label.CopyTo(info[(3 + LabelPrefix.Length)..]);
         info[3 + labelLength] = (byte)context.Length;
         context.CopyTo(info[(4 + labelLength)..]);
+        info[^1] = 0x01;
 
-        HKDF.Expand(hash, secret, output, info);
+        // HKDF-Expand is T(1) || T(2) || ..., and every TLS 1.3 output fits in T(1) =
+        // HMAC(secret, HkdfLabel || 0x01). Computed directly because HKDF.Expand allocates about
+        // 300 bytes a call on net9 and net10, and a handshake makes sixteen calls. Into a scratch
+        // block rather than into output, which may be shorter than a block and may alias secret.
+        Span<byte> block = stackalloc byte[hashLength];
+        try
+        {
+            if (hashLength == 48)
+                HMACSHA384.HashData(secret, info, block);
+            else
+                HMACSHA256.HashData(secret, info, block);
+
+            block[..output.Length].CopyTo(output);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(block);
+        }
     }
+
+    private static int HashLength(HashAlgorithmName hash) =>
+        hash == HashAlgorithmName.SHA256 ? 32
+        : hash == HashAlgorithmName.SHA384 ? 48
+        : throw new ArgumentException($"TLS 1.3 cipher suites hash with SHA-256 or SHA-384, not {hash.Name}.", nameof(hash));
 
     /// <summary>
     /// Derive-Secret: <see cref="ExpandLabel"/> with a transcript hash as the context.

@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Security.Cryptography;
 
 namespace QuickProxyNet;
@@ -121,6 +122,10 @@ internal static class VmessKdf
     {
         if (destination.Length < length)
             throw new ArgumentException($"Destination must be at least {length} bytes.", nameof(destination));
+
+        // The public overloads give one path element or three. Two would compute over a pad pair that
+        // InitLevel never wrote.
+        Debug.Assert(levels is 1 or 3);
 
         // Path order matters: label wraps the seed first (level 0), then arg1, then
         // arg2 (outermost). Pads for all levels live in one stack buffer.

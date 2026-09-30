@@ -1,78 +1,63 @@
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.CompilerServices;
 
 namespace QuickProxyNet;
 
 public abstract class ProxyClient : IProxyClient
 {
-    private ProxyClient(Uri uri)
-    {
-        ProxyUri = uri;
-
-        ProxyHost = uri.Host;
-        ProxyPort = uri.Port;
-
-        if (!string.IsNullOrWhiteSpace(uri.UserInfo))
-        {
-            var sep = uri.UserInfo.IndexOf(':');
-            if (sep < 0)
-                throw new ArgumentException("Invalid credentials format.", nameof(uri.UserInfo));
-
-            ProxyCredentials = new NetworkCredential(
-                uri.UserInfo.Substring(0, sep),
-                uri.UserInfo.Substring(sep + 1));
-        }
-    }
+    private readonly string _scheme;
 
     protected ProxyClient(string protocol, string host, int port)
     {
-        if (host == null)
-            throw new ArgumentNullException(nameof(host));
+        ArgumentException.ThrowIfNullOrEmpty(host);
+        if (host.Length > 255)
+            throw new ArgumentException("A host name is at most 255 characters.", nameof(host));
 
-        if (host.Length == 0 || host.Length > 255)
-            throw new ArgumentException("The length of the host name must be between 0 and 256 characters.",
+        // The characters ValidateArguments refuses in a target, for the same reason: no host name
+        // contains them. A NUL cut the name short at the resolver, so "localhost\0evil.example"
+        // connected to localhost, and the proxy host also becomes a TLS name and, over ws and
+        // httpupgrade, a Host header. Every client and Proxy.Create(ProxyType, ...) come through
+        // here. The share-link parsers whose grammar can hand such a host over refuse it first, as a
+        // malformed link.
+        int bad = IndexOfSpaceOrControl(host);
+        if (bad >= 0)
+            throw new ArgumentException(
+                $"A proxy host cannot contain a space or an ASCII control character; this one has " +
+                $"U+{(int)host[bad]:X4} at index {bad}.",
                 nameof(host));
 
-        if (port < 0 || port > 65535)
-            throw new ArgumentOutOfRangeException(nameof(port));
+        // Zero is allowed here and means the default port.
+        ArgumentOutOfRangeException.ThrowIfNegative(port);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(port, 65535);
 
-        ProxyHost = host;
+        _scheme = protocol;
+        // An IPv6 literal is kept unbracketed however it arrived: a Uri authority hands over
+        // "[::1]", a parsed share link "::1", and code comparing hosts should not see both.
+        ProxyHost = host.Length > 2 && host[0] == '[' && host[^1] == ']' ? host[1..^1] : host;
         ProxyPort = port == 0 ? 1080 : port;
-        ProxyUri = new Uri($"{protocol}://{FormatUriHost(host)}:{port}");
     }
 
     protected ProxyClient(string protocol, string host, int port, NetworkCredential credentials)
+        : this(protocol, host, port)
     {
-        if (host == null)
-            throw new ArgumentNullException(nameof(host));
-
-        if (host.Length == 0 || host.Length > 255)
-            throw new ArgumentException("The length of the host name must be between 0 and 256 characters.",
-                nameof(host));
-
-        if (port < 0 || port > 65535)
-            throw new ArgumentOutOfRangeException(nameof(port));
-
-        if (credentials == null)
-            throw new ArgumentNullException(nameof(credentials));
-
-        ProxyHost = host;
-        ProxyPort = port == 0 ? 1080 : port;
-
-        ProxyUri = new Uri($"{protocol}://{credentials.UserName}:{credentials.Password}@{FormatUriHost(host)}:{port}");
-        ProxyCredentials = credentials;
+        ProxyCredentials = credentials ?? throw new ArgumentNullException(nameof(credentials));
     }
 
-    // An IPv6 literal must be bracketed in a URI ("[2001:db8::1]"), otherwise the Uri
-    // parser reads the address's colons as a port separator and throws. Host names and
-    // IPv4 literals never contain ':', so this only affects IPv6 endpoints.
-    // An IPv6 literal needs brackets inside a URI; one that already has them (a hand-built
-    // options object may carry "[::1]") must not get a second pair.
-    private static string FormatUriHost(string host) =>
-        host.Contains(':') && !host.StartsWith('[') ? $"[{host}]" : host;
+    /// <summary>
+    /// The proxy as <c>scheme://host:port</c>, for logs and diagnostics.
+    /// </summary>
+    /// <remarks>
+    /// Never carries credentials, and for the share-link families none of what it takes to
+    /// connect either: the uuid, sni and transport are in <see cref="SourceLink"/>.
+    /// </remarks>
+    public override string ToString() => ProxyHost.Contains(':')
+        ? $"{_scheme}://[{ProxyHost}]:{ProxyPort}"
+        : $"{_scheme}://{ProxyHost}:{ProxyPort}";
 
-    public Uri ProxyUri { get; private set; }
+    /// <inheritdoc />
+    /// <remarks>Set by the <see cref="Proxy"/> factory methods when a link was the input.</remarks>
+    public string? SourceLink { get; internal set; }
+
     public abstract ProxyType Type { get; }
 
     public NetworkCredential? ProxyCredentials { get; }
@@ -86,129 +71,233 @@ public abstract class ProxyClient : IProxyClient
     public LingerOption? LingerState { get; set; } = new LingerOption(true, 0);
     public bool NoDelay { get; set; } = true;
 
-    public int WriteTimeout { get; set; }
-    public int ReadTimeout { get; set; }
-
     private Socket CreateSocket()
     {
-        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
-        {
-            NoDelay = this.NoDelay,
-            SendTimeout = this.WriteTimeout,
-            ReceiveTimeout = this.ReadTimeout
-        };
-        if (LingerState is not null)
-            socket.LingerState = LingerState;
-        if (LocalEndPoint is not null)
-            socket.Bind(LocalEndPoint);
-        return socket;
-    }
-
-    public async ValueTask<Stream> ConnectAsync(string host, int port, CancellationToken cancellationToken = default)
-    {
-        ValidateArguments(host, port);
-
-        cancellationToken.ThrowIfCancellationRequested();
-
-        var socket = CreateSocket();
-
+        // Socket(SocketType, ProtocolType) is dual-mode wherever the OS has IPv6, so the proxy is
+        // reachable at an address of either family; an IPv4-only socket fails every IPv6 proxy.
+        // A LocalEndPoint is the caller choosing the interface, and with it the family.
+        IPEndPoint? local = LocalEndPoint;
+        var socket = local is null
+            ? new Socket(SocketType.Stream, ProtocolType.Tcp)
+            : new Socket(local.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
         try
         {
-            await socket.ConnectAsync(ProxyHost, ProxyPort, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            socket.Dispose();
-            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
-                $"Failed to connect to proxy {ProxyHost}:{ProxyPort} for target {host}:{port}.", ex);
-        }
-
-        var stream = new NetworkStream(socket, true);
-        try
-        {
-            return await ConnectAsync(stream, host, port, cancellationToken);
-        }
-        catch (Exception ex) when (ex is IOException or SocketException)
-        {
-            // The proxy closed or reset the connection while we were still negotiating. That is
-            // the same failure class as "could not connect" from the caller's point of view, and
-            // it must arrive as one: a raw IOException here is the one place the "all protocol
-            // errors are ProxyProtocolException" promise was not kept.
-            await stream.DisposeAsync();
-            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
-                $"Proxy {ProxyHost}:{ProxyPort} closed the connection during the handshake for target {host}:{port}.", ex);
+            // No SendTimeout or ReceiveTimeout: they bound only synchronous socket calls, and every
+            // read and write of the handshake is asynchronous. The timeout and the token given to
+            // ConnectAsync are what bound it.
+            socket.NoDelay = NoDelay;
+            if (LingerState is not null)
+                socket.LingerState = LingerState;
+            if (local is not null)
+                socket.Bind(local);
+            return socket;
         }
         catch
         {
-            await stream.DisposeAsync();
+            // A failed bind must not leak the handle: under a few thousand concurrent checks the
+            // leak is what turns one address-in-use into handle exhaustion.
+            socket.Dispose();
             throw;
         }
     }
 
-    public virtual async ValueTask<Stream> ConnectAsync(string host, int port, TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+    public ValueTask<Stream> ConnectAsync(string host, int port, CancellationToken cancellationToken = default) =>
+        ConnectCoreAsync(host, port, timeout: null, cancellationToken);
+
+    public virtual ValueTask<Stream> ConnectAsync(string host, int port, TimeSpan timeout,
+        CancellationToken cancellationToken = default) =>
+        ConnectCoreAsync(host, port, timeout, cancellationToken);
+
+    /// <summary>The longest delay <see cref="CancellationTokenSource.CancelAfter(TimeSpan)"/> accepts.</summary>
+    private static readonly TimeSpan MaxTimeout = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
+    private async ValueTask<Stream> ConnectCoreAsync(string host, int port, TimeSpan? timeout,
+        CancellationToken cancellationToken)
     {
         ValidateArguments(host, port);
 
+        // Checked before anything is allocated. The timer this replaced rejected the same values,
+        // but only once the socket existed, and nothing disposed that socket.
+        if (timeout is { } limit && limit != Timeout.InfiniteTimeSpan && (limit < TimeSpan.Zero || limit > MaxTimeout))
+            throw new ArgumentOutOfRangeException(nameof(timeout), limit,
+                "A timeout must be between zero and about 49 days, or Timeout.InfiniteTimeSpan.");
+
         cancellationToken.ThrowIfCancellationRequested();
 
-        var socket = CreateSocket();
-        var timedOut = new StrongBox<bool>(false);
+        // The timeout is a cancellation like the caller's own, handed to every await of the connect
+        // and the handshake. It used to be a timer that disposed the socket: it could fire after
+        // the handshake had produced the stream, and the caller got a dead stream and no error.
+        using CancellationTokenSource? timeoutSource = timeout is null
+            ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource?.CancelAfter(timeout!.Value);
+        CancellationToken token = timeoutSource?.Token ?? cancellationToken;
 
-        await using ITimer timer = TimeProvider.System.CreateTimer(
-            static s =>
-            {
-                var state = (Tuple<Socket, StrongBox<bool>>)s!;
-                Volatile.Write(ref state.Item2.Value, true);
-                state.Item1.Dispose();
-            },
-            Tuple.Create(socket, timedOut), timeout, Timeout.InfiniteTimeSpan);
-
+        Socket socket;
         try
         {
-            await socket.ConnectAsync(ProxyHost, ProxyPort, cancellationToken);
+            socket = CreateSocket();
+        }
+        catch (SocketException ex)
+        {
+            // CreateSocket binds LocalEndPoint and allocates a handle, so it fails for reasons a
+            // caller must see as a connection failure like any other: an address already in use,
+            // or handle exhaustion under a few thousand concurrent checks. Left outside the guard
+            // this was the one path that escaped ConnectAsync as a raw SocketException.
+            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
+                $"Could not open a socket for proxy {ProxyHost}:{ProxyPort}.", ex);
+        }
+
+        NetworkStream stream;
+        try
+        {
+            await socket.ConnectAsync(ProxyHost, ProxyPort, token);
+            // Inside the guard: on a socket that failed underneath, the constructor throws a raw
+            // IOException of its own.
+            stream = new NetworkStream(socket, ownsSocket: true);
         }
         catch (Exception ex)
         {
             socket.Dispose();
-            if (Volatile.Read(ref timedOut.Value))
-                throw new ProxyProtocolException(ProxyErrorCode.Timeout,
-                    $"Connection to proxy {ProxyHost}:{ProxyPort} timed out after {timeout}.", ex);
-            throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
-                $"Failed to connect to proxy {ProxyHost}:{ProxyPort} for target {host}:{port}.", ex);
+            throw Stopped(ex, timeout, timeoutSource, cancellationToken)
+                ?? new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
+                    $"Failed to connect to proxy {ProxyHost}:{ProxyPort} for target {host}:{port}.", ex);
         }
 
-        var stream = new NetworkStream(socket, true);
         try
         {
-            return await ConnectAsync(stream, host, port, cancellationToken);
+            return await ConnectAsync(stream, host, port, token);
         }
         catch (Exception ex)
         {
             await stream.DisposeAsync();
-            if (Volatile.Read(ref timedOut.Value))
-                throw new ProxyProtocolException(ProxyErrorCode.Timeout,
-                    $"Connection to proxy {ProxyHost}:{ProxyPort} timed out after {timeout}.", ex);
-            if (ex is IOException or SocketException)
-                throw new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
-                    $"Proxy {ProxyHost}:{ProxyPort} closed the connection during the handshake for target {host}:{port}.", ex);
-            throw;
+
+            // The proxy closing or resetting the connection mid-negotiation is the same failure as
+            // "could not connect" to the caller, and must arrive as one.
+            Exception? translated = Stopped(ex, timeout, timeoutSource, cancellationToken)
+                ?? (ex is IOException or SocketException
+                    ? new ProxyProtocolException(ProxyErrorCode.ConnectionFailed,
+                        $"Proxy {ProxyHost}:{ProxyPort} closed the connection during the handshake for target {host}:{port}.", ex)
+                    : null);
+
+            if (translated is null)
+                throw;
+            throw translated;
         }
+    }
+
+    /// <summary>
+    /// What a failure means when the attempt was stopped rather than refused, or null when it was not.
+    /// </summary>
+    /// <remarks>
+    /// The caller's own cancellation is checked first, because it cancels the linked timeout source
+    /// too. It is <see cref="OperationCanceledException"/> in every phase; it used to arrive wrapped
+    /// as <see cref="ProxyErrorCode.ConnectionFailed"/> from the TCP connect and bare from the
+    /// handshake. A timeout is never an <see cref="OperationCanceledException"/>.
+    /// </remarks>
+    private Exception? Stopped(Exception ex, TimeSpan? timeout, CancellationTokenSource? timeoutSource,
+        CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+            return new OperationCanceledException(
+                $"The connection to proxy {ProxyHost}:{ProxyPort} was canceled.", ex, cancellationToken);
+
+        if (timeoutSource is { IsCancellationRequested: true })
+            return new ProxyProtocolException(ProxyErrorCode.Timeout,
+                $"Connection to proxy {ProxyHost}:{ProxyPort} timed out after {timeout}.", ex);
+
+        return null;
     }
 
     public abstract ValueTask<Stream> ConnectAsync(Stream source, string host, int port,
         CancellationToken cancellationToken = default);
 
+    /// <inheritdoc />
+    public async ValueTask<Stream> ConnectAsync(EndPoint target, CancellationToken cancellationToken = default)
+    {
+        var (host, port) = SplitTarget(target);
+        return await ConnectAsync(host, port, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<Stream> ConnectAsync(EndPoint target, TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        var (host, port) = SplitTarget(target);
+        return await ConnectAsync(host, port, timeout, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<Stream> ConnectAsync(Stream source, EndPoint target,
+        CancellationToken cancellationToken = default)
+    {
+        var (host, port) = SplitTarget(target);
+        return await ConnectAsync(source, host, port, cancellationToken);
+    }
+
+    /// <summary>
+    /// Checks a target the caller named. Every <c>ConnectAsync</c> overload runs this before it
+    /// sends anything, the stream overloads included, because callers reach those directly.
+    /// </summary>
     internal static void ValidateArguments(string host, int port)
     {
-        if (host == null)
-            throw new ArgumentNullException(nameof(host));
+        ArgumentException.ThrowIfNullOrEmpty(host);
+        if (host.Length > 255)
+            throw new ArgumentException("A host name is at most 255 characters.", nameof(host));
 
-        if (host.Length == 0 || host.Length > 255)
-            throw new ArgumentException("The length of the host name must be between 0 and 256 characters.",
+        // The host goes on the wire as the bytes it is: into an HTTP request line and Host header,
+        // and into SOCKS4a's NUL-terminated host field. A CR or LF there ended the CONNECT request
+        // and smuggled headers and a second request to the proxy; a NUL ended the SOCKS4a host and
+        // turned the rest into tunnel data; a space splits the request line. No host name contains
+        // any of them, so they are refused for every protocol. Non-ASCII is allowed: an
+        // internationalised name is a host name, and UTF-8 never encodes one as a byte below 0x80.
+        // The message gives the position rather than the host, which would carry the same
+        // characters into a log.
+        int bad = IndexOfSpaceOrControl(host);
+        if (bad >= 0)
+            throw new ArgumentException(
+                $"A target host cannot contain a space or an ASCII control character; this one has " +
+                $"U+{(int)host[bad]:X4} at index {bad}.",
                 nameof(host));
 
-        if (port <= 0 || port > 65535)
-            throw new ArgumentOutOfRangeException(nameof(port));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(port);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(port, 65535);
+    }
+
+    /// <summary>
+    /// The index of the first space or ASCII control character (0x00-0x1F, 0x7F) in
+    /// <paramref name="host"/>, or -1 when it has none.
+    /// </summary>
+    /// <remarks>
+    /// One rule for every place a host enters: a target, a proxy host, and the share-link grammars
+    /// that hand a host over without <see cref="Uri"/> having parsed it.
+    /// </remarks>
+    internal static int IndexOfSpaceOrControl(ReadOnlySpan<char> host)
+    {
+        for (int i = 0; i < host.Length; i++)
+        {
+            if (host[i] <= ' ' || host[i] == (char)0x7F) // 0x7F is DEL
+                return i;
+        }
+
+        return -1;
+    }
+
+    // The EndPoint overloads spell the target the way the host-and-port ones take it. An
+    // IPv4-mapped address is an IPv4 host however a dual-mode socket reports it; left as IPv6,
+    // SOCKS5, VLESS, VMess and Trojan would all put an IPv6 address type on the wire for it.
+    internal static (string Host, int Port) SplitTarget(EndPoint target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+
+        return target switch
+        {
+            DnsEndPoint dns => (dns.Host, dns.Port),
+            IPEndPoint ip => (
+                (ip.Address.IsIPv4MappedToIPv6 ? ip.Address.MapToIPv4() : ip.Address).ToString(), ip.Port),
+            _ => throw new ArgumentException(
+                $"A proxy target must be a {nameof(DnsEndPoint)} or an {nameof(IPEndPoint)}, not {target.GetType().Name}.",
+                nameof(target))
+        };
     }
 }

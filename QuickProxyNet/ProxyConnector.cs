@@ -1,70 +1,50 @@
-﻿using System.Net;
-using System.Net.Security;
-using System.Security.Authentication;
-using System.Security.Cryptography.X509Certificates;
+using System.Net;
 
 namespace QuickProxyNet;
 
 internal static class ProxyConnector
 {
-    public static async ValueTask<Stream> ConnectToProxyAsync(Stream stream, Uri proxyUri, string host, int port,
-        NetworkCredential? proxyCredentials, CancellationToken cancellationToken)
+    /// <summary>
+    /// Negotiates a SOCKS or HTTP CONNECT tunnel over a stream already connected to the proxy,
+    /// disposing the stream when negotiation fails or is cancelled.
+    /// </summary>
+    /// <remarks>
+    /// HTTPS is not negotiated here. Its TLS session is with the proxy and belongs to
+    /// <see cref="HttpsProxyClient"/>, which runs it through <see cref="TlsHandshake"/> so that a
+    /// certificate failure reaches the caller as a proxy error rather than as a raw
+    /// <c>AuthenticationException</c>.
+    /// </remarks>
+    public static async ValueTask<Stream> ConnectToProxyAsync(Stream stream, ProxyType type, string host, int port,
+        NetworkCredential? credentials, CancellationToken cancellationToken)
     {
         await using (cancellationToken.Register(static s => ((Stream)s!).Dispose(), stream))
         {
             try
             {
-                var credentials = proxyCredentials?.GetCredential(proxyUri, proxyUri.Scheme);
-
-                if (string.Equals(proxyUri.Scheme, "socks5", StringComparison.OrdinalIgnoreCase))
+                switch (type)
                 {
-                    await SocksHelper.EstablishSocks5TunnelAsync(stream, host, port, credentials, cancellationToken)
-                        .ConfigureAwait(false);
-                    return stream;
-                }
+                    case ProxyType.Socks5:
+                        await SocksHelper.EstablishSocks5TunnelAsync(stream, host, port, credentials, cancellationToken)
+                            .ConfigureAwait(false);
+                        return stream;
 
-                if (string.Equals(proxyUri.Scheme, "socks4a", StringComparison.OrdinalIgnoreCase))
-                {
-                    await SocksHelper
-                        .EstablishSocks4TunnelAsync(stream, true, host, port, credentials, cancellationToken)
-                        .ConfigureAwait(false);
-                    return stream;
-                }
+                    case ProxyType.Socks4:
+                    case ProxyType.Socks4a:
+                        await SocksHelper
+                            .EstablishSocks4TunnelAsync(stream, type == ProxyType.Socks4a, host, port, credentials,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        return stream;
 
-                if (string.Equals(proxyUri.Scheme, "socks4", StringComparison.OrdinalIgnoreCase))
-                {
-                    await SocksHelper
-                        .EstablishSocks4TunnelAsync(stream, false, host, port, credentials, cancellationToken)
-                        .ConfigureAwait(false);
-                    return stream;
-                }
+                    case ProxyType.Http:
+                        return await HttpHelper
+                            .EstablishHttpTunnelAsync(stream, host, port, credentials, cancellationToken)
+                            .ConfigureAwait(false);
 
-                if (string.Equals(proxyUri.Scheme, "http", StringComparison.OrdinalIgnoreCase))
-                {
-                    var result = await HttpHelper.EstablishHttpTunnelAsync(stream, proxyUri, host, port, credentials,
-                        cancellationToken);
-                    return result;
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(type), type,
+                            "Only SOCKS and plain HTTP tunnels are negotiated here.");
                 }
-
-                if (string.Equals(proxyUri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
-                {
-                    var ssl = new SslStream(stream, false);
-                    try
-                    {
-                        await ssl.AuthenticateAsClientAsync(DefaultSslOptions(proxyUri.Host), cancellationToken);
-                        return await HttpHelper.EstablishHttpTunnelAsync(ssl, proxyUri, host, port, credentials,
-                            cancellationToken);
-                    }
-                    catch
-                    {
-                        await ssl.DisposeAsync().ConfigureAwait(false);
-                        // SslStream(leaveOpen:false) disposes inner stream,
-                        // so skip the outer catch to avoid double-dispose.
-                        throw;
-                    }
-                }
-
-                throw new NotSupportedException($"Unsupported proxy scheme: {proxyUri.Scheme}");
             }
             catch
             {
@@ -73,10 +53,4 @@ internal static class ProxyConnector
             }
         }
     }
-
-    private static SslClientAuthenticationOptions DefaultSslOptions(string targetHost) => new()
-    {
-        EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-        TargetHost = targetHost
-    };
 }

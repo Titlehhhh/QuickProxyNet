@@ -63,7 +63,10 @@ public sealed class VlessOptions
     /// </summary>
     public string? HostHeader { get; init; }
 
-    /// <summary>TLS/REALITY server name (SNI). Falls back to <see cref="Host"/> when null.</summary>
+    /// <summary>
+    /// TLS/REALITY server name (SNI). When null or empty, <see cref="HostHeader"/> is sent, then
+    /// <see cref="Host"/>.
+    /// </summary>
     public string? Sni { get; init; }
 
     /// <summary>ALPN protocol identifiers for the TLS handshake, if specified.</summary>
@@ -86,4 +89,20 @@ public sealed class VlessOptions
 
     /// <summary>The resolved transport layer this configuration selects.</summary>
     internal TransportKind TransportKind => ProxyTransport.Resolve(Transport);
+
+    /// <summary>
+    /// The name a TLS or REALITY hello carries: <see cref="Sni"/>, else <see cref="HostHeader"/>,
+    /// else <see cref="Host"/>, an empty string counting as absent.
+    /// </summary>
+    /// <remarks>
+    /// One property, so the share-link parser and the client constructor check the same name the
+    /// handshake sends, whichever field it comes from.
+    /// </remarks>
+    internal string ServerName => TlsHandshake.ResolveServerName(Sni, HostHeader, Host);
+
+    /// <summary>
+    /// The <c>Host</c> header a <c>ws</c> or <c>httpupgrade</c> request carries:
+    /// <see cref="HostHeader"/>, else <see cref="Sni"/>, else <see cref="Host"/>.
+    /// </summary>
+    internal string TransportHostHeader => ProxyTransport.ResolveHostHeader(HostHeader, Sni, Host);
 }

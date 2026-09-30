@@ -148,6 +148,42 @@
         "type": "httpupgrade",
         "path": "/qpn-hu"
       }
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "ss-aes256",
+      "listen": "0.0.0.0",
+      "listen_port": 10011,
+      "method": "aes-256-gcm",
+      "password": "qpn-test-ss-password",
+      "network": "tcp"
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "ss-chacha",
+      "listen": "0.0.0.0",
+      "listen_port": 10012,
+      "method": "chacha20-ietf-poly1305",
+      "password": "qpn-test-ss-password",
+      "network": "tcp"
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "ss-aes128",
+      "listen": "0.0.0.0",
+      "listen_port": 10013,
+      "method": "aes-128-gcm",
+      "password": "qpn-test-ss-password",
+      "network": "tcp"
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "ss-aes192",
+      "listen": "0.0.0.0",
+      "listen_port": 10014,
+      "method": "aes-192-gcm",
+      "password": "qpn-test-ss-password",
+      "network": "tcp"
     }
   ],
   "outbounds": [

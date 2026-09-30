@@ -43,6 +43,7 @@ public static class DockerEndpoints
     public const string VmessWsId = "66666666-6666-4666-8666-666666666666";
     public const string VlessHttpUpgradeId = "77777777-7777-4777-8777-777777777777";
     public const string TrojanPassword = "qpn-test-trojan-password";
+    public const string ShadowsocksPassword = "qpn-test-ss-password";
 
     /// <summary>
     /// Paths the ws/httpupgrade inbounds are configured with. A WebSocket server only upgrades
@@ -83,6 +84,17 @@ public static class DockerEndpoints
     public const int SingBoxTrojanWs = 24819;
     public const int SingBoxVlessHttpUpgrade = 24820;
 
+    // Shadowsocks: container ports 10011..10014. The +24800/+24810 arithmetic of the first decade
+    // cannot hold for both servers past 10010, so each server gets a fresh decade: xray 2482x,
+    // sing-box 2483x. aes-192-gcm exists on sing-box only — Xray has no such cipher.
+    public const int XrayShadowsocksAes256 = 24821;
+    public const int XrayShadowsocksChacha = 24822;
+    public const int XrayShadowsocksAes128 = 24823;
+    public const int SingBoxShadowsocksAes256 = 24831;
+    public const int SingBoxShadowsocksChacha = 24832;
+    public const int SingBoxShadowsocksAes128 = 24833;
+    public const int SingBoxShadowsocksAes192 = 24834;
+
     /// <summary>Every mapped host port, used as the readiness probe list.</summary>
     public static readonly (int Port, string Description)[] All =
     [
@@ -104,7 +116,14 @@ public static class DockerEndpoints
         (SingBoxVlessWs, "sing-box vless over ws"),
         (SingBoxVmessWs, "sing-box vmess over ws"),
         (SingBoxTrojanWs, "sing-box trojan over ws"),
-        (SingBoxVlessHttpUpgrade, "sing-box vless over httpupgrade")
+        (SingBoxVlessHttpUpgrade, "sing-box vless over httpupgrade"),
+        (XrayShadowsocksAes256, "xray shadowsocks aes-256-gcm"),
+        (XrayShadowsocksChacha, "xray shadowsocks chacha20-ietf-poly1305"),
+        (XrayShadowsocksAes128, "xray shadowsocks aes-128-gcm"),
+        (SingBoxShadowsocksAes256, "sing-box shadowsocks aes-256-gcm"),
+        (SingBoxShadowsocksChacha, "sing-box shadowsocks chacha20-ietf-poly1305"),
+        (SingBoxShadowsocksAes128, "sing-box shadowsocks aes-128-gcm"),
+        (SingBoxShadowsocksAes192, "sing-box shadowsocks aes-192-gcm")
     ];
 
     public static int VlessNonePort(Server server) => server is Server.Xray ? XrayVlessNone : SingBoxVlessNone;
@@ -118,4 +137,13 @@ public static class DockerEndpoints
 
     public static int VlessHttpUpgradePort(Server server) =>
         server is Server.Xray ? XrayVlessHttpUpgrade : SingBoxVlessHttpUpgrade;
+
+    public static int ShadowsocksAes256Port(Server server) =>
+        server is Server.Xray ? XrayShadowsocksAes256 : SingBoxShadowsocksAes256;
+
+    public static int ShadowsocksChachaPort(Server server) =>
+        server is Server.Xray ? XrayShadowsocksChacha : SingBoxShadowsocksChacha;
+
+    public static int ShadowsocksAes128Port(Server server) =>
+        server is Server.Xray ? XrayShadowsocksAes128 : SingBoxShadowsocksAes128;
 }

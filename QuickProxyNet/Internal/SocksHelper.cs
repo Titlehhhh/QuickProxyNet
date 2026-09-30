@@ -9,8 +9,17 @@ namespace QuickProxyNet;
 
 internal static class SocksHelper
 {
-    // Largest possible message size is 513 bytes (Socks5 username & password auth)
-    private const int BufferSize = 513;
+    // One buffer holds every message this helper writes, so it is sized for the largest of them:
+    //   SOCKS4a request  VN(1) CD(1) DSTPORT(2) DSTIP(4) USERID(255) NUL(1) HOST(255) NUL(1)  520
+    //   SOCKS5 auth      VER(1) ULEN(1) UNAME(255) PLEN(1) PASSWD(255)                        513
+    //   SOCKS4 request   VN(1) CD(1) DSTPORT(2) DSTIP(4) USERID(255) NUL(1)                   264
+    //   SOCKS5 request   VER(1) CMD(1) RSV(1) ATYP(1) LEN(1) DST.ADDR(255) DST.PORT(2)        262
+    //   SOCKS5 greeting  VER(1) NMETHODS(1) METHODS(2)                                          4
+    // Replies are read into the same buffer and are smaller: at most 257 bytes in one read (the
+    // rest of a SOCKS5 reply naming a domain), 8 for SOCKS4. It was 513, which a SOCKS4a request
+    // with a long user id and host does not fit; ArrayPool rounding the rental up to 1024 is the
+    // only reason that worked.
+    internal const int BufferSize = 520;
     private const int ProtocolVersion4 = 4;
     private const int ProtocolVersion5 = 5;
     private const int SubnegotiationVersion = 1; // Socks5 username & password auth
@@ -172,13 +181,18 @@ internal static class SocksHelper
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buffer);
+            // The request held the username and password (SOCKS5) or the user id (SOCKS4).
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: credentials is not null);
         }
     }
 
     internal static async ValueTask EstablishSocks4TunnelAsync(Stream stream, bool isVersion4a, string host, int port,
         NetworkCredential? credentials, CancellationToken cancellationToken)
     {
+        // The client constructors have checked this already, but NetworkCredential is mutable, and a
+        // user name changed after construction must not reach the wire either.
+        ValidateUserId(credentials, nameof(credentials));
+
         var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
 
         try
@@ -251,6 +265,9 @@ internal static class SocksHelper
                 totalLength += hostLength + 1;
             }
 
+            // BufferSize is the largest SOCKS4a request, and ArrayPool's rounding would hide a request
+            // that outgrew it.
+            Debug.Assert(totalLength <= BufferSize);
             await stream.WriteAsync(buffer.AsMemory(0, totalLength), cancellationToken).ConfigureAwait(false);
 
             // +----+----+----+----+----+----+----+----+
@@ -279,21 +296,39 @@ internal static class SocksHelper
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buffer);
+            // The request held the username and password (SOCKS5) or the user id (SOCKS4).
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: credentials is not null);
         }
+    }
+
+    /// <summary>
+    /// Refuses a SOCKS4 user id the wire format cannot carry: one with a NUL in it.
+    /// </summary>
+    /// <remarks>
+    /// SOCKS4 ends the user id at its first NUL, and the proxy reads whatever follows as the next
+    /// field. For SOCKS4a that is the host, so <c>alice\0evil.example</c> as the user id of a request
+    /// for <c>good.example</c> reached the proxy as user <c>alice</c> asking for
+    /// <c>evil.example</c>. The message never includes the user id, which is a credential.
+    /// </remarks>
+    internal static void ValidateUserId(NetworkCredential? credentials, string paramName)
+    {
+        if (credentials is not null && credentials.UserName.Contains('\0'))
+            throw new ArgumentException(
+                "A SOCKS4 user id cannot contain a NUL character: the protocol ends the user id at the " +
+                "first one, and the proxy would read what follows as the next field.",
+                paramName);
     }
 
     private static byte EncodeString(ReadOnlySpan<char> chars, Span<byte> buffer, string parameterName)
     {
-        try
-        {
-            return checked((byte)Encoding.UTF8.GetBytes(chars, buffer));
-        }
-        catch (ArgumentException)
-        {
-            Debug.Assert(Encoding.UTF8.GetByteCount(chars) > 255);
-            throw new ProxyProtocolException(ProxyErrorCode.SocksStringTooLong, $"Encoding the {parameterName} took more than the maximum of 255 bytes");
-        }
+        // The length goes out as a single byte, so the write is capped at 255 whatever room the
+        // rented buffer has. ArrayPool rounds 520 up to 1024, and a string that fit the buffer but
+        // not the length byte used to escape ConnectAsync as an OverflowException from the cast.
+        if (!Encoding.UTF8.TryGetBytes(chars, buffer[..Math.Min(buffer.Length, 255)], out int written))
+            throw new ProxyProtocolException(ProxyErrorCode.SocksStringTooLong,
+                $"Encoding the {parameterName} took more than the maximum of 255 bytes");
+
+        return (byte)written;
     }
 
     private static void VerifyProtocolVersion(byte expected, byte version)

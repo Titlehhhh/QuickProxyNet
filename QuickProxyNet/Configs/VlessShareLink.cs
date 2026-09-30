@@ -159,6 +159,19 @@ public static class VlessShareLink
             }
         }
 
+        // A REALITY key or short id that cannot be decoded describes a node nobody can reach, so
+        // the link is refused here with the value named. The alternative was a FormatException
+        // out of ConnectAsync, which that call may not throw.
+        if (security == VlessSecurity.Reality)
+        {
+            if (!string.IsNullOrEmpty(pbk) && !RealityAuth.TryDecodePublicKey(pbk, out _, out error))
+                return false;
+
+            Span<byte> shortId = stackalloc byte[RealityAuth.ShortIdSize];
+            if (!RealityAuth.TryParseShortId(shortId, sid, out error))
+                return false;
+        }
+
         string? remark = uri.Fragment.Length > 1
             ? Uri.UnescapeDataString(uri.Fragment.Substring(1))
             : null;
@@ -180,6 +193,25 @@ public static class VlessShareLink
             RealityShortId = sid,
             Remark = remark
         };
+
+        // The path and the Host header go into the HTTP upgrade request as they are, and %0D%0A in
+        // path=, host= or sni= decodes to a CR LF that ended a line of it.
+        if (!ProxyTransport.TryValidateRequest(options.TransportKind, options.Path, options.TransportHostHeader, out error))
+        {
+            options = null;
+            return false;
+        }
+
+        // The server name and ALPN list go into a ClientHello written as one TLS record. Past what it
+        // holds, the write failed after the TCP connect with an exception ConnectAsync may not throw,
+        // so a link that could never be sent is refused here.
+        if (security == VlessSecurity.Reality &&
+            !TlsClientHello.TryValidate(options.ServerName, options.Alpn, out error))
+        {
+            options = null;
+            return false;
+        }
+
         error = null;
         return true;
     }

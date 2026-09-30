@@ -1,5 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 
 namespace QuickProxyNet;
@@ -166,6 +168,7 @@ internal sealed class VmessStream : Stream
     // ================================ reading ================================
 
     /// <inheritdoc/>
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public override async ValueTask<int> ReadAsync(
         Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
@@ -240,6 +243,7 @@ internal sealed class VmessStream : Stream
 
     // Reads one sealed chunk (length prefix + ciphertext + tag) into _receiveSealed and
     // returns the sealed length. The chunk is not opened yet.
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     private async ValueTask<int> ReceiveSealedChunkAsync(CancellationToken cancellationToken)
     {
         _receiveSealed ??= ArrayPool<byte>.Shared.Rent(InitialReceiveBufferSize);
@@ -287,6 +291,10 @@ internal sealed class VmessStream : Stream
     private void OpenChunk(int sealedLength, Memory<byte> plaintext)
     {
         int plaintextLength = sealedLength - TagSize;
+
+        // A plaintext of any other length makes the AEAD throw ArgumentException, which the
+        // CryptographicException translation below would let straight out of ReadAsync.
+        Debug.Assert(plaintext.Length == plaintextLength);
         try
         {
             _reader.Open(
@@ -308,6 +316,7 @@ internal sealed class VmessStream : Stream
     // ================================ writing ================================
 
     /// <inheritdoc/>
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public override async ValueTask WriteAsync(
         ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
     {
@@ -371,6 +380,9 @@ internal sealed class VmessStream : Stream
     // Frames and seals one chunk into _sendBuffer; returns the number of wire bytes.
     private int SealChunk(ReadOnlySpan<byte> plaintext)
     {
+        // WriteAsync cuts every write to this, which is what the send buffer holds with the length
+        // prefix and the tag.
+        Debug.Assert(plaintext.Length <= MaxSendPlaintextSize);
         byte[] buffer = _sendBuffer ??= ArrayPool<byte>.Shared.Rent(SendBufferSize);
 
         int sealedLength = plaintext.Length + TagSize;

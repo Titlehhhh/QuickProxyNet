@@ -14,10 +14,10 @@
 - **Zero runtime dependencies** — BCL only, no third-party packages
 - **Zero-alloc protocol logic** — `ArrayPool`, `stackalloc`, `Utf8Formatter`, `ValueTask` throughout
 - **5 classic proxy protocols** — HTTP, HTTPS, SOCKS4, SOCKS4a, SOCKS5
-- **3 VPN-style protocols** — VLESS, VMess (VMessAEAD), Trojan, over `tcp`, `ws` or `httpupgrade`
+- **4 VPN-style protocols** — VLESS, VMess (VMessAEAD), Trojan, over `tcp`, `ws` or `httpupgrade`; Shadowsocks AEAD over `tcp`
 - **VLESS REALITY in-process** — no external binary: a managed TLS 1.3 client (ClientHello, X25519, key schedule, record layer) lives in the core package, and `VlessClient` uses it automatically when `security=reality`
 - **XTLS `xtls-rprx-vision`** — the flow used by ~95% of real-world REALITY nodes
-- **Share-link parsing** — pass a `vless://`, `vmess://`, `trojan://`, `socks5://`, `http://`, … string directly; no `Uri` gymnastics
+- **Share-link parsing** — pass a `vless://`, `vmess://`, `trojan://`, `ss://`, `socks5://`, `http://`, … string directly; no `Uri` gymnastics
 - **Static one-liner API** — `Proxy.ConnectAsync(link, host, port)` for mass checkers
 - **Structured error codes** — `ProxyProtocolException` with `ProxyErrorCode` enum for programmatic error handling
 - **Timeout support** — per-connection timeouts with `ProxyErrorCode.Timeout`
@@ -33,10 +33,10 @@ dotnet add package QuickProxyNet
 
 ### One-liner from a share link (recommended)
 
-`Proxy.ConnectAsync` and `ProxyClientFactory.Instance.Create` accept the link as a **string** and dispatch on the scheme themselves. This matters for `vmess://` links: they are base64-encoded JSON, and `System.Uri` rejects most real-world ones (host length limit, base64 padding). You no longer have to inspect the scheme yourself to pick a parser.
+`Proxy.ConnectAsync` and `Proxy.Create` accept the link as a **string** and dispatch on the scheme themselves. This matters for `vmess://` links: they are base64-encoded JSON, and `System.Uri` rejects most real-world ones (host length limit, base64 padding). You no longer have to inspect the scheme yourself to pick a parser.
 
 ```csharp
-// Works for http/https/socks4/socks4a/socks5/vless/trojan/vmess links
+// Works for http/https/socks4/socks4a/socks5/vless/trojan/vmess/ss links
 await using var stream = await Proxy.ConnectAsync(
     "socks5://user:pass@127.0.0.1:1080",
     "example.com", 443,
@@ -51,28 +51,49 @@ await using var stream = await Proxy.ConnectAsync(
     TimeSpan.FromSeconds(10));
 ```
 
-### Extension method on Uri
-
-```csharp
-var proxy = new Uri("http://proxy.example.com:8080");
-await using var stream = await proxy.ConnectThroughProxyAsync("example.com", 443);
-```
-
 ### Factory API (when you need to configure the client)
 
 ```csharp
-var client = ProxyClientFactory.Instance.Create("socks5://proxy:1080");
+var client = Proxy.Create("socks5://proxy:1080");
 client.NoDelay = true;
-client.ReadTimeout = 5000;
 
 await using var stream = await client.ConnectAsync("example.com", 443);
+```
+
+### Target as an EndPoint
+
+`IProxyClient.ConnectAsync` and `Proxy.ConnectAsync(link, ...)` also take the target as an `EndPoint`, the way `Socket.ConnectAsync` does: a `DnsEndPoint` for a name the proxy resolves, or an `IPEndPoint`. That is what `SocketsHttpHandler.ConnectCallback` hands over, so an `HttpClient` goes through any proxy this library speaks in one line:
+
+```csharp
+var proxy = Proxy.Create("vless://...");
+using var http = new HttpClient(new SocketsHttpHandler
+{
+    ConnectCallback = (context, ct) => proxy.ConnectAsync(context.DnsEndPoint, ct)
+});
+```
+
+### Many links at once
+
+`Proxy.TryCreate` never throws, whatever the input. A subscription is other people's text, and one bad line must not stop the run. The `error` string starts with the exception type, so you can group the refusals.
+
+```csharp
+foreach (var line in File.ReadLines("subscription.txt"))
+{
+    if (!Proxy.TryCreate(line, out var client, out var error))
+    {
+        Console.WriteLine($"skipped: {error}");
+        continue;
+    }
+
+    // client.SourceLink is the original text, with the uuid, sni and transport
+}
 ```
 
 ### With explicit proxy type and credentials
 
 ```csharp
 var creds = new NetworkCredential("user", "pass");
-var client = ProxyClientFactory.Instance.Create(
+var client = Proxy.Create(
     ProxyType.Socks5, "proxy.example.com", 1080, creds);
 
 await using var stream = await client.ConnectAsync("example.com", 80,
@@ -98,8 +119,21 @@ Also not implemented: Vision's TLS-in-TLS splice. It is a throughput optimizatio
 | VLESS | Supported | `security=none`, `tls`, `reality`; flow `xtls-rprx-vision` |
 | Trojan | Supported | over TLS |
 | VMess | Supported | VMessAEAD, `alterId=0`, optional TLS |
+| Shadowsocks | Supported | AEAD (SIP004/SIP007) over `tcp`: `aes-128-gcm`, `aes-192-gcm`, `aes-256-gcm`, `chacha20-ietf-poly1305` |
 | Hysteria2 / TUIC | **Not supported** | QUIC-based; the library has no datagram model |
-| Shadowsocks | **Not supported** | — |
+
+### Shadowsocks
+
+`ss://` links in both grammars are accepted — the legacy `ss://base64(method:password@host:port)#tag`
+and SIP002 `ss://userinfo@host:port/?plugin=…#tag` with base64 or plain `method:password` userinfo.
+The four AEAD ciphers above are spoken over raw TCP. Everything else is refused **by name** with a
+`NotSupportedException` before a byte is written, never silently downgraded: the AEAD-2022
+`2022-blake3-*` family (SIP022, needs BLAKE3), every legacy stream cipher (`rc4-md5`, `aes-*-cfb`,
+`chacha20-ietf`, …), `none`/`plain`, `xchacha20-ietf-poly1305` (no XChaCha20 in the .NET BCL),
+and any `plugin=` (SIP003 plugins are separate processes). No UDP, no `ws`/TLS transport for
+Shadowsocks, no SIP008 JSON subscriptions. `chacha20-ietf-poly1305` needs an OS with
+ChaCha20-Poly1305 — Windows 11 / Server 2022, not Windows 10. A wrong password is not reported as
+one: the server sends nothing, so it looks exactly like a dead target (see `ShadowsocksClient`).
 
 ### Transports
 
@@ -203,6 +237,9 @@ messages never contain the credential: a malformed user id is reported by length
 | `SocksIPv6NotSupported` | SOCKS4 does not support IPv6 |
 | `SocksNoIPv4Address` | Failed to resolve host to IPv4 (SOCKS4) |
 | `SocksStringTooLong` | SOCKS field exceeded 255-byte limit |
+| `StringTooLong` | A protocol string field, such as a target host name, exceeded the 255-byte limit |
+| `TransportUpgradeFailed` | The server refused the `ws` or `httpupgrade` upgrade, or did not answer with a WebSocket handshake |
+| `TlsHandshakeFailed` | The TLS handshake with the proxy failed: an untrusted or expired certificate, a name the server does not serve, or no shared cipher suite |
 
 ## Supported Proxy Types
 
@@ -216,6 +253,7 @@ messages never contain the credential: a malformed user id is reported by length
 | `Vless` | VLESS (incl. REALITY, `xtls-rprx-vision`) | UUID | Yes |
 | `Vmess` | VMess (VMessAEAD) | UUID | Yes |
 | `Trojan` | Trojan | Password | Yes |
+| `Shadowsocks` | Shadowsocks AEAD | Password + cipher | Yes |
 
 ## Configuration Options
 
@@ -225,9 +263,12 @@ When using the factory/client API, each client supports:
 |---|---|---|
 | `NoDelay` | `true` | Disable Nagle algorithm |
 | `LingerState` | `Linger(true, 0)` | Socket linger on close |
-| `ReadTimeout` | `0` (infinite) | Read timeout in ms |
-| `WriteTimeout` | `0` (infinite) | Write timeout in ms |
 | `LocalEndPoint` | `null` | Bind to specific local IP |
+
+There is no read or write timeout on the client. The `TimeSpan` overloads of `ConnectAsync` bound
+the connection and the handshake. For reads and writes on the returned stream, pass a
+`CancellationToken` to the async calls, or set the stream's own `ReadTimeout` / `WriteTimeout`
+when its `CanTimeout` is `true`.
 
 ## License
 

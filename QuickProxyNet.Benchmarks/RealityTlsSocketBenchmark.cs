@@ -175,7 +175,7 @@ public class RealityTlsSocketBenchmark
         {
             Write = new TlsRecordProtection(suite, sinkSecret)
         };
-        _sink = new RealityTlsStream(drainTransport, sinkRecords, []);
+        _sink = new RealityTlsStream(drainTransport, sinkRecords);
 
         var echoTransport = new NetworkStream(_echo.Client, ownsSocket: false);
         var clientRecords = new TlsRecordStream(echoTransport)
@@ -183,7 +183,7 @@ public class RealityTlsSocketBenchmark
             Write = new TlsRecordProtection(suite, pairSecret),
             Read = new TlsRecordProtection(suite, pairSecret)
         };
-        _client = new RealityTlsStream(echoTransport, clientRecords, []);
+        _client = new RealityTlsStream(echoTransport, clientRecords);
     }
 
     [GlobalCleanup]

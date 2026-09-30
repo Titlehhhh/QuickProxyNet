@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 
@@ -90,6 +91,10 @@ internal sealed class TlsRecordProtection : IDisposable
 
     public TlsRecordProtection(TlsCipherSuite suite, ReadOnlySpan<byte> trafficSecret)
     {
+        // HMAC takes a key of any length, so a secret sliced to the wrong length would derive the wrong
+        // keys without complaint, and the first record would fail authentication as the peer's fault.
+        Debug.Assert(trafficSecret.Length == suite.HashLength);
+
         _iv = new byte[TlsCipherSuite.NonceLength];
 
         // On the stack rather than the heap: this is a record-protection key, and the largest a
@@ -292,6 +297,10 @@ internal sealed class TlsRecordStream(Stream transport) : IDisposable
                 _start = 0;
             }
 
+            // Reached only with less than one whole record buffered: at most a header and a body one
+            // byte short of MaxCiphertext, against a 64 KiB buffer.
+            Debug.Assert(_end < _inbound.Length, "a 0-byte transport read would read as end of stream");
+
             int read = await transport
                 .ReadAsync(_inbound.AsMemory(_end, _inbound.Length - _end), cancellationToken)
                 .ConfigureAwait(false);
@@ -437,6 +446,12 @@ internal sealed class TlsRecordStream(Stream transport) : IDisposable
     /// <summary>Frames one record into <paramref name="destination"/>; returns the bytes written.</summary>
     private int StageRecord(TlsContentType type, ReadOnlySpan<byte> payload, Span<byte> destination)
     {
+        // WriteAsync refuses a larger payload and WriteApplicationDataAsync cuts records to fit. Nothing
+        // below would notice otherwise: the pool hands out 32 KiB for _outboundPlain's 16 385 bytes, so
+        // an oversized record would be sealed into the slack and sent for the peer to refuse.
+        Debug.Assert(payload.Length <= MaxPlaintext &&
+                     destination.Length >= payload.Length + (Write is null ? HeaderLength : RecordOverhead));
+
         if (Write is null)
         {
             destination[0] = (byte)type;

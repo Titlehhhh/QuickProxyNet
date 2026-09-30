@@ -13,8 +13,10 @@ public class Socks4Client : ProxyClient
     {
     }
 
+    /// <exception cref="ArgumentException"><paramref name="credentials"/> has a NUL in its user name.</exception>
     public Socks4Client(string host, int port, NetworkCredential credentials) : base("socks4", host, port, credentials)
     {
+        SocksHelper.ValidateUserId(credentials, nameof(credentials));
     }
 
     public override ProxyType Type => ProxyType.Socks4;
@@ -23,8 +25,7 @@ public class Socks4Client : ProxyClient
     public override async ValueTask<Stream> ConnectAsync(Stream stream, string host, int port,
         CancellationToken cancellationToken = default)
     {
-        var result =
-            await ProxyConnector.ConnectToProxyAsync(stream, ProxyUri, host, port, ProxyCredentials, cancellationToken);
-        return result;
+        ValidateArguments(host, port);
+        return await ProxyConnector.ConnectToProxyAsync(stream, Type, host, port, ProxyCredentials, cancellationToken);
     }
-}
+}

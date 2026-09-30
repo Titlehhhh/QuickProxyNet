@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Net.WebSockets;
+using System.Runtime.CompilerServices;
 
 namespace QuickProxyNet;
 
@@ -57,6 +59,7 @@ internal sealed class WebSocketStream : Stream
     public override void Flush() => _inner.Flush();
     public override Task FlushAsync(CancellationToken cancellationToken) => _inner.FlushAsync(cancellationToken);
 
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public override async ValueTask<int> ReadAsync(
         Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
@@ -99,6 +102,7 @@ internal sealed class WebSocketStream : Stream
         }
     }
 
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public override async ValueTask WriteAsync(
         ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
     {
@@ -132,6 +136,38 @@ internal sealed class WebSocketStream : Stream
     public override Task WriteAsync(
         byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
         WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+    // Stream's own span overloads rent an array, go through it and hand it back to the shared pool
+    // uncleared, which would leave tunnel bytes — a VLESS id among them — in memory the next
+    // renter reads. These take the same route but clear the array on the way back.
+    public override int Read(Span<byte> buffer)
+    {
+        byte[] rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
+        try
+        {
+            int read = Read(rented, 0, buffer.Length);
+            rented.AsSpan(0, read).CopyTo(buffer);
+            return read;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+        }
+    }
+
+    public override void Write(ReadOnlySpan<byte> buffer)
+    {
+        byte[] rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
+        try
+        {
+            buffer.CopyTo(rented);
+            Write(rented, 0, buffer.Length);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+        }
+    }
 
     protected override void Dispose(bool disposing)
     {

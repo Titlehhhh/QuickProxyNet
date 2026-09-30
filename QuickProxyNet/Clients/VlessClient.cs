@@ -19,10 +19,16 @@ namespace QuickProxyNet;
 public sealed class VlessClient : ProxyClient
 {
     private readonly List<SslApplicationProtocol>? _alpn;
+    private readonly byte[]? _realityPublicKey;
 
     /// <summary>Creates a VLESS client from strongly-typed options.</summary>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
-    /// <exception cref="ArgumentException">The options carry an invalid UUID.</exception>
+    /// <exception cref="ArgumentException">
+    /// The options carry an invalid UUID; or, for REALITY, a public key or short id that cannot be
+    /// decoded, or a server name or ALPN list that a ClientHello cannot carry; or, for <c>ws</c> and
+    /// <c>httpupgrade</c>, an ASCII control character in the path or the Host header; or a proxy host
+    /// with a space or an ASCII control character.
+    /// </exception>
     public VlessClient(VlessOptions options)
         : base("vless", (options ?? throw new ArgumentNullException(nameof(options))).Host, options.Port)
     {
@@ -36,6 +42,31 @@ public sealed class VlessClient : ProxyClient
                 $"VLESS user id is unusable ({options.Id.Length} characters): it is neither a canonical UUID nor " +
                 "a string of 1..30 characters (which would be mapped to a UUID).",
                 nameof(options));
+
+        // The same for REALITY's key and short id, and for the same reason: decoded inside
+        // ConnectAsync, a bad one left it as a FormatException, which that call may not throw.
+        // A missing key is still reported at connect, as the NotSupportedException it has always been.
+        if (options.Security == VlessSecurity.Reality)
+        {
+            if (!string.IsNullOrEmpty(options.RealityPublicKey) &&
+                !RealityAuth.TryDecodePublicKey(options.RealityPublicKey, out _realityPublicKey, out string? keyError))
+                throw new ArgumentException(keyError, nameof(options));
+
+            Span<byte> shortId = stackalloc byte[RealityAuth.ShortIdSize];
+            if (!RealityAuth.TryParseShortId(shortId, options.RealityShortId, out string? shortIdError))
+                throw new ArgumentException(shortIdError, nameof(options));
+
+            // The server name and ALPN list too. Past what one TLS record holds, the hello failed to
+            // write after the TCP connect, as an InvalidOperationException or an
+            // ArgumentOutOfRangeException out of ConnectAsync.
+            if (!TlsClientHello.TryValidate(options.ServerName, options.Alpn, out string? helloError))
+                throw new ArgumentException(helloError, nameof(options));
+        }
+
+        // A CR LF in the path or the Host header used to go into the HTTP upgrade request as it was.
+        if (!ProxyTransport.TryValidateRequest(
+                options.TransportKind, options.Path, options.TransportHostHeader, out string? requestError))
+            throw new ArgumentException(requestError, nameof(options));
 
         Options = options;
         _alpn = BuildAlpn(options.Alpn);
@@ -73,6 +104,7 @@ public sealed class VlessClient : ProxyClient
     public override async ValueTask<Stream> ConnectAsync(Stream stream, string host, int port,
         CancellationToken cancellationToken = default)
     {
+        ValidateArguments(host, port);
         TransportKind transport = EnsureSupported();
 
         // Each layer takes ownership of the one below it, so tracking the outermost stream is
@@ -85,7 +117,8 @@ public sealed class VlessClient : ProxyClient
                 // SslStream(leaveInnerStreamOpen:false) disposes the inner stream too.
                 var ssl = new SslStream(layered, leaveInnerStreamOpen: false);
                 layered = ssl;
-                await ssl.AuthenticateAsClientAsync(BuildSslOptions(), cancellationToken).ConfigureAwait(false);
+                await TlsHandshake.AuthenticateAsync(
+                    ssl, BuildSslOptions(), Options.ServerName, cancellationToken).ConfigureAwait(false);
             }
             else if (Options.Security == VlessSecurity.Reality)
             {
@@ -98,7 +131,7 @@ public sealed class VlessClient : ProxyClient
                 transport,
                 layered,
                 Options.Path,
-                ProxyTransport.ResolveHostHeader(Options.HostHeader, Options.Sni, Options.Host),
+                Options.TransportHostHeader,
                 cancellationToken).ConfigureAwait(false);
 
             return await VlessHelper.EstablishVlessTunnelAsync(layered, Options, host, port, cancellationToken)
@@ -140,43 +173,20 @@ public sealed class VlessClient : ProxyClient
     /// </remarks>
     private RealityTlsOptions BuildRealityOptions() => new()
     {
-        ServerName = Options.Sni ?? Options.HostHeader ?? Options.Host,
-        PublicKey = DecodeBase64Url(Options.RealityPublicKey!),
+        // Bounded by the constructor, like the ALPN list below.
+        ServerName = Options.ServerName,
+        // Decoded and length-checked by the constructor; EnsureSupported has already refused a
+        // REALITY configuration without a key.
+        PublicKey = _realityPublicKey!,
         ShortId = string.IsNullOrEmpty(Options.RealityShortId) ? null : Options.RealityShortId,
         Alpn = Options.Alpn is { Count: > 0 } ? Options.Alpn : ["h2", "http/1.1"]
     };
 
-    /// <summary>Decodes the unpadded base64url that share links carry <c>pbk</c> in.</summary>
-    private static byte[] DecodeBase64Url(string value)
-    {
-        string padded = value.Replace('-', '+').Replace('_', '/');
-        padded += (padded.Length % 4) switch { 2 => "==", 3 => "=", _ => "" };
-
-        byte[] key;
-        try
-        {
-            key = Convert.FromBase64String(padded);
-        }
-        catch (FormatException ex)
-        {
-            throw new FormatException(
-                $"The REALITY public key '{value}' is not valid base64url (expected the 'pbk' value from the share link).", ex);
-        }
-
-        // Checked here, before any byte is written, so a truncated pbk fails as a configuration
-        // error with the value named — not as an ArgumentException from inside the handshake.
-        if (key.Length != X25519.KeySize)
-            throw new FormatException(
-                $"The REALITY public key '{value}' decodes to {key.Length} bytes; an X25519 key is {X25519.KeySize}.");
-
-        return key;
-    }
-
     private SslClientAuthenticationOptions BuildSslOptions() => new()
     {
-        // Same precedence Xray applies: explicit SNI, else the transport Host header, else the
-        // server address. A ws+tls node commonly sets only 'host'.
-        TargetHost = Options.Sni ?? Options.HostHeader ?? Options.Host,
+        // The name REALITY sends too: explicit SNI, else the transport Host header, else the server
+        // address, an empty one counting as absent (see TlsHandshake.ResolveServerName).
+        TargetHost = Options.ServerName,
         EnabledSslProtocols = SslProtocols,
         RemoteCertificateValidationCallback = ServerCertificateValidationCallback,
         ApplicationProtocols = _alpn
