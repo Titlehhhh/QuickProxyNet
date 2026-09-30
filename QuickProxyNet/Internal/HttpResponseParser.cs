@@ -38,7 +38,7 @@ internal struct HttpResponseParser : IDisposable
         // Grow: rent a larger buffer, copy, return old
         byte[] next = ArrayPool<byte>.Shared.Rent(_writtenCount + BufferSize);
         _buffer.AsSpan(0, _writtenCount).CopyTo(next);
-        ArrayPool<byte>.Shared.Return(_buffer);
+        ArrayPool<byte>.Shared.Return(_buffer, clearArray: true);
         _buffer = next;
         return _buffer.AsMemory(_writtenCount);
     }
@@ -127,6 +127,6 @@ internal struct HttpResponseParser : IDisposable
         byte[] buf = _buffer;
         _buffer = null!;
         if (buf is not null)
-            ArrayPool<byte>.Shared.Return(buf);
+            ArrayPool<byte>.Shared.Return(buf, clearArray: true);
     }
 }
